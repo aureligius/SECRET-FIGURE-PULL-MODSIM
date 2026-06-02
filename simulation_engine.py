@@ -1,110 +1,113 @@
-
 """
 simulation_engine.py
 ====================
 Labubu Blind Box — Stochastic Simulation Engine (Finite Pool Edition)
-All Monte Carlo simulations read from the CURRENT depleted pool state,
-not from a theoretical full pool.
 
-Key upgrade from previous version:
-  - simulate_budget_confidence() reads current stock snapshot
-  - All 100,000 trials start from the SAME depleted state the user faces right now
-  - Sensitivity analysis functions for Notion article data tables
+Key contracts with app.py:
+  - run_all_strategies()   → dict with keys "A","B","C","D" → SimulationResult
+  - run_gbm_display()      → np.ndarray shape (n_display, T+1)  ← critical
+  - simulate_shelf_scenarios(N, rng) → np.ndarray of p_cond values
+  - shelf_conditional(n_taken, rng)  → dict with keys used in Tab 4
+  - generate_sealed_case(rng)        → list of 12 figure name strings
+  - BOX_PRICE, CASE_PRICE, FIGURE_NAMES, P_SECRET, P_REGULAR_EACH exported
 """
+
 import numpy as np
 from typing import Optional
-from stock_manager import BOX_PRICE, CASE_PRICE, FIGURE_NAMES, load_stock, P_SECRET, P_REGULAR_EACH
-import numpy as np
-from typing import Optional
+
 from stock_manager import (
-    FIGURE_NAMES, BOX_PRICE,
-    load_stock,
+    BOX_PRICE, CASE_PRICE, FIGURE_NAMES,
+    P_SECRET, P_REGULAR_EACH,
+    load_stock, _generate_fresh_batch,
 )
 
-# ────────────────────────────────────────────────────────────────
-# COMPATIBILITY WRAPPER CLASS (Fixes AttributeError: 'dict' has no attribute 'mean')
-# ────────────────────────────────────────────────────────────────
-# ────────────────────────────────────────────────────────────────
-# FINAL COMPATIBILITY WRAPPER CLASS (Fixes AttributeError: 'p99')
-# ────────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────
+# SIMULATION RESULT WRAPPER
+# ─────────────────────────────────────────────
 class SimulationResult(dict):
     """
-    A dictionary subclass that allows dot-notation access to statistical 
-    properties to satisfy structural expectations in app.py.
+    Dict subclass with dot-notation access to statistical properties.
+    Requires 'costs' key (np.ndarray) to be set for all computed properties.
     """
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        
+
+    @property
+    def costs(self) -> np.ndarray:
+        return self.get("_costs", np.array([0.0]))
+
+    @costs.setter
+    def costs(self, arr: np.ndarray):
+        self["_costs"] = arr
+
     @property
     def mean(self) -> float:
-        if "average_pulls_to_success" in self:
-            return float(self["average_pulls_to_success"])
-        if "cost_distribution" in self and len(self["cost_distribution"]) > 0:
-            return float(np.mean(self["cost_distribution"]))
-        return float(self.get("mean", 0.0))
+        return float(np.mean(self.costs))
 
     @property
     def median(self) -> float:
-        if "cost_distribution" in self and len(self["cost_distribution"]) > 0:
-            return float(np.median(self["cost_distribution"]))
-        return float(self.get("median", 0.0))
-        
+        return float(np.median(self.costs))
+
     @property
     def std(self) -> float:
-        if "cost_distribution" in self and len(self["cost_distribution"]) > 0:
-            return float(np.std(self["cost_distribution"]))
-        return float(self.get("std", 0.0))
+        return float(np.std(self.costs))
 
     @property
     def p95(self) -> float:
-        if "cost_distribution" in self and len(self["cost_distribution"]) > 0:
-            return float(np.percentile(self["cost_distribution"], 95))
-        if "mean" in self and "std" in self and self["std"] > 0:
-            return float(self["mean"] + (1.645 * self["std"]))
-        return float(self.get("p95", self.mean * 1.3))
+        return float(np.percentile(self.costs, 95))
 
-    # 🌟 FIX: Add the 99th percentile attribute expected by line 339 in app.py
     @property
     def p99(self) -> float:
-        # Calculate true empirical 99th percentile if distribution is available
-        if "cost_distribution" in self and len(self["cost_distribution"]) > 0:
-            return float(np.percentile(self["cost_distribution"], 99))
-        
-        # Parametric fallback using Z-score for 99th percentile (approx 2.326)
-        if "mean" in self and "std" in self and self["std"] > 0:
-            return float(self["mean"] + (2.326 * self["std"]))
-            
-        # Standard relative fallback for rigid strategies (like flat case buying)
-        return float(self.get("p99", self.mean * 1.5))
+        return float(np.percentile(self.costs, 99))
+
+    @property
+    def prob_over_200(self) -> float:
+        return float(np.mean(self.costs > 200))
+
+    @property
+    def prob_over_500(self) -> float:
+        return float(np.mean(self.costs > 500))
+
+    @property
+    def prob_over_1000(self) -> float:
+        return float(np.mean(self.costs > 1000))
+
+    def summary_dict(self) -> dict:
+        return {
+            "Strategy":        self.get("label", "?"),
+            "Mean ($)":        f"${self.mean:,.0f}",
+            "Median ($)":      f"${self.median:,.0f}",
+            "Std Dev ($)":     f"${self.std:,.0f}",
+            "95th Pct ($)":    f"${self.p95:,.0f}",
+            "99th Pct ($)":    f"${self.p99:,.0f}",
+            "P(>$200)":        f"{self.prob_over_200:.1%}",
+            "P(>$500)":        f"{self.prob_over_500:.1%}",
+            "P(>$1,000)":      f"{self.prob_over_1000:.1%}",
+        }
 
     def __getattr__(self, name):
         if name in self:
             return self[name]
-        raise AttributeError(f"'SimulationResult' object has no attribute '{name}'")
+        raise AttributeError(f"'SimulationResult' has no attribute '{name}'")
+
 
 # ─────────────────────────────────────────────
-# CORE: FINITE POOL SINGLE DRAW
+# CORE: FINITE POOL SINGLE DRAW (Discrete Inverse Transform)
 # ─────────────────────────────────────────────
-def _draw_from_pool(
-    stock_snapshot: dict,
-    rng: np.random.Generator,
-) -> str:
+def _draw_from_pool(stock: dict, rng: np.random.Generator) -> Optional[str]:
     """
-    Draw one figure from a stock snapshot using Discrete Inverse Transform.
-    Modifies stock_snapshot IN PLACE (for sequential trial simulation).
+    Draw one figure from a local stock snapshot using Discrete Inverse Transform.
+    Mutates stock IN PLACE (sampling without replacement).
 
-    Steps (per Dr. Syukron Week 10, Slide 13):
-      1. Build probability weights from current counts
-      2. Compute CDF = cumulative sum of weights
-      3. Generate U ~ Uniform(0,1)
-      4. Find smallest i such that U <= CDF[i]
-      5. Return figure at index i, decrement its count
+    Per Dr. Syukron Week 10 Slide 13:
+      1. Build weights from current counts
+      2. CDF = cumsum(weights)
+      3. U ~ Uniform(0,1)
+      4. Return figure at first i where U ≤ CDF[i]
     """
-    figures = [f for f in FIGURE_NAMES if stock_snapshot[f] > 0]
+    figures = [f for f in FIGURE_NAMES if stock.get(f, 0) > 0]
     if not figures:
         return None
 
-    counts = np.array([stock_snapshot[f] for f in figures], dtype=float)
+    counts = np.array([stock[f] for f in figures], dtype=float)
     probs  = counts / counts.sum()
     cdf    = np.cumsum(probs)
 
@@ -113,148 +116,403 @@ def _draw_from_pool(
     idx = min(idx, len(figures) - 1)
 
     chosen = figures[idx]
-    stock_snapshot[chosen] -= 1
+    stock[chosen] -= 1
     return chosen
 
 
-# NEW FILE
-import numpy as np
-from typing import Optional
-from stock_manager import BOX_PRICE, FIGURE_NAMES, load_stock
-
-def _draw_from_pool(stock: dict, rng: np.random.Generator) -> Optional[str]:
-    """
-    Draws a single box from the trial's local finite stock snapshot
-    without replacement using the Discrete Inverse Transform method.
-    """
-    # Filter for figures that are still physically available on the shelf
-    figures = [f for f in FIGURE_NAMES if stock[f] > 0]
-    if not figures:
-        return None
-    
-    # Calculate probability distribution based on remaining quantities
-    counts = np.array([stock[f] for f in figures], dtype=float)
-    probs = counts / counts.sum()
-    cdf = np.cumsum(probs)
-    
-    # Draw U ~ Uniform(0,1)
-    U = rng.uniform(0.0, 1.0)
-    drawn_idx = int(np.searchsorted(cdf, U, side="left"))
-    drawn_idx = min(drawn_idx, len(figures) - 1)  # Safety clamp
-    
-    figure = figures[drawn_idx]
-    stock[figure] -= 1  # Crucial: Mutate the sample pool for without-replacement simulation
-    return figure
-
 # ─────────────────────────────────────────────
-# MACHINE 1: MONTE CARLO BUDGET CONFIDENCE
+# STRATEGY A — Single Box (Gambler)
 # ─────────────────────────────────────────────
-def simulate_budget_confidence(
-    N:              int   = 100_000,
-    target_figure:  str   = "Golden Labubu ✦",
-    confidence_levels: list = None,
-    seed:           Optional[int] = None,
-) -> dict:
+def _simulate_strategy_a(stock_snapshot: dict, total_remaining: int,
+                          N: int, rng: np.random.Generator) -> np.ndarray:
     """
-    Run N Monte Carlo trials starting from the CURRENT depleted pool state.
-
-    For each trial:
-      - Start with a deep copy of the current stock snapshot
-      - Open boxes one at a time using Discrete Inverse Transform
-      - Record how many boxes were needed to pull the target figure
-      - If pool exhausted without finding target -> record full pool size as cost
-
-    Returns budget_for_confidence dict and full cost distribution.
+    Buy 1 box at a time until secret found.
+    Each trial starts from the same depleted snapshot (sampling without replacement).
     """
-    if confidence_levels is None:
-        confidence_levels = [0.50, 0.70, 0.80, 0.90, 0.95, 0.99]
-
-    rng = np.random.default_rng(seed)
-
-    pool_data       = load_stock()
-    stock_snapshot  = pool_data["stock"].copy()
-    total_remaining = pool_data["total_remaining"]
-
-    # Guard: target already gone from pool
-    if stock_snapshot.get(target_figure, 0) == 0:
-        return {
-            "target_gone":           True,
-            "target_figure":         target_figure,
-            "total_remaining":       total_remaining,
-            "budget_for_confidence": {c: 0.0 for c in confidence_levels},
-            "cost_distribution":     np.array([0.0]),
-            "message": (
-                f"'{target_figure}' is no longer in the pool. "
-                "A previous user already pulled it."
-            ),
-        }
-
-    # Run N trials
+    target = "Golden Labubu ✦"
     boxes_needed = np.zeros(N, dtype=np.int64)
 
     for trial in range(N):
         trial_stock = stock_snapshot.copy()
         pulls = 0
-
         while True:
             fig = _draw_from_pool(trial_stock, rng)
             if fig is None:
                 pulls = total_remaining
                 break
             pulls += 1
-            if fig == target_figure:
+            if fig == target:
                 break
-
         boxes_needed[trial] = pulls
 
-    costs = boxes_needed * BOX_PRICE
+    return boxes_needed * BOX_PRICE
 
-    budget_for_confidence = {}
-    for c in confidence_levels:
-        budget_for_confidence[c] = float(np.percentile(costs, c * 100))
 
-    total = sum(stock_snapshot.values())
-    p_target = stock_snapshot.get(target_figure, 0) / total if total > 0 else 0
-    theoretical_mean = (BOX_PRICE / p_target) if p_target > 0 else float("inf")
+# ─────────────────────────────────────────────
+# STRATEGY B — Buy Full Case (Whale)
+# ─────────────────────────────────────────────
+def _simulate_strategy_b(stock_snapshot: dict, total_remaining: int,
+                          N: int, rng: np.random.Generator) -> np.ndarray:
+    """
+    Buy one full case (12 boxes) at a time until secret found.
+    Resale value of duplicates is not modelled here (net cost = boxes opened × price).
+    """
+    target = "Golden Labubu ✦"
+    costs  = np.zeros(N, dtype=float)
+
+    for trial in range(N):
+        trial_stock = stock_snapshot.copy()
+        total_spent = 0.0
+        found = False
+        while not found:
+            # Open up to 12 boxes per round
+            for _ in range(12):
+                fig = _draw_from_pool(trial_stock, rng)
+                if fig is None:
+                    found = True
+                    break
+                total_spent += BOX_PRICE
+                if fig == target:
+                    found = True
+                    break
+        costs[trial] = total_spent
+
+    return costs
+
+
+# ─────────────────────────────────────────────
+# STRATEGY C — Patient Buyer (wait for price dip)
+# Modelled as: buy only when a simulated GBM price ≤ threshold.
+# For cost distribution we simulate how many boxes needed (same as A)
+# but weight cost by average resale multiple at time of purchase.
+# ─────────────────────────────────────────────
+def _simulate_strategy_c(stock_snapshot: dict, total_remaining: int,
+                          N: int, rng: np.random.Generator,
+                          gbm_S0: float, gbm_mu: float, gbm_sigma: float,
+                          gbm_T: int, threshold: float) -> np.ndarray:
+    """
+    Patient buyer: each trial draws a GBM final price.
+    If price ≤ threshold, they buy (cost based on box count, same as A).
+    If price > threshold, they wait and pay a premium = current_price/S0 × base_cost.
+    """
+    target = "Golden Labubu ✦"
+    dt     = 1.0 / 252  # daily steps
+    costs  = np.zeros(N, dtype=float)
+
+    for trial in range(N):
+        trial_stock = stock_snapshot.copy()
+        pulls = 0
+        while True:
+            fig = _draw_from_pool(trial_stock, rng)
+            if fig is None:
+                pulls = total_remaining
+                break
+            pulls += 1
+            if fig == target:
+                break
+
+        # Simulate GBM price on purchase day
+        days   = rng.integers(1, max(gbm_T, 2))
+        shocks = rng.standard_normal(days)
+        log_r  = (gbm_mu - 0.5 * gbm_sigma**2) * dt + gbm_sigma * np.sqrt(dt) * shocks
+        price  = float(gbm_S0 * np.exp(np.sum(log_r)))
+
+        # Patient buyer saves when price ≤ threshold
+        if price <= threshold:
+            multiplier = threshold / gbm_S0
+        else:
+            multiplier = price / gbm_S0
+
+        costs[trial] = pulls * BOX_PRICE * max(0.5, min(multiplier, 3.0))
+
+    return costs
+
+
+# ─────────────────────────────────────────────
+# STRATEGY D — Calculated Batch Buyer
+# ─────────────────────────────────────────────
+def _simulate_strategy_d(stock_snapshot: dict, total_remaining: int,
+                          N: int, rng: np.random.Generator,
+                          batch_size: int) -> np.ndarray:
+    """
+    Buy batch_size boxes per round, stop when secret found or pool exhausted.
+    """
+    target = "Golden Labubu ✦"
+    costs  = np.zeros(N, dtype=float)
+
+    for trial in range(N):
+        trial_stock = stock_snapshot.copy()
+        total_spent = 0.0
+        found = False
+        while not found:
+            for _ in range(batch_size):
+                fig = _draw_from_pool(trial_stock, rng)
+                if fig is None:
+                    found = True
+                    break
+                total_spent += BOX_PRICE
+                if fig == target:
+                    found = True
+                    break
+        costs[trial] = total_spent
+
+    return costs
+
+
+# ─────────────────────────────────────────────
+# MACHINE 1: MONTE CARLO BUDGET CONFIDENCE
+# ─────────────────────────────────────────────
+def simulate_budget_confidence(
+    N:                 int   = 100_000,
+    target_figure:     str   = "Golden Labubu ✦",
+    confidence_levels: list  = None,
+    seed:              Optional[int] = None,
+) -> dict:
+    """
+    Run N Monte Carlo trials starting from the CURRENT depleted pool state.
+    Returns budget needed for each confidence level and full cost distribution.
+    """
+    if confidence_levels is None:
+        confidence_levels = [0.50, 0.70, 0.80, 0.90, 0.95, 0.99]
+
+    rng         = np.random.default_rng(seed)
+    pool_data   = load_stock()
+    snapshot    = pool_data["stock"].copy()
+    total_left  = pool_data["total_remaining"]
+
+    if snapshot.get(target_figure, 0) == 0:
+        return {
+            "target_gone":           True,
+            "target_figure":         target_figure,
+            "total_remaining":       total_left,
+            "budget_for_confidence": {c: 0.0 for c in confidence_levels},
+            "cost_distribution":     np.array([0.0]),
+            "message":               f"'{target_figure}' is no longer in the pool.",
+        }
+
+    costs = _simulate_strategy_a(snapshot, total_left, N, rng)
+
+    budget_for_confidence = {
+        c: float(np.percentile(costs, c * 100))
+        for c in confidence_levels
+    }
+
+    total = sum(snapshot.values())
+    p_target = snapshot.get(target_figure, 0) / total if total > 0 else 0.0
 
     return {
         "target_gone":           False,
         "target_figure":         target_figure,
-        "total_remaining":       total_remaining,
+        "total_remaining":       total_left,
         "budget_for_confidence": budget_for_confidence,
         "cost_distribution":     costs,
         "mean_cost":             float(np.mean(costs)),
         "median_cost":           float(np.median(costs)),
         "std_cost":              float(np.std(costs)),
         "p95_cost":              float(np.percentile(costs, 95)),
-        "theoretical_mean":      theoretical_mean,
+        "theoretical_mean":      (BOX_PRICE / p_target) if p_target > 0 else float("inf"),
         "p_target_now":          p_target,
         "N":                     N,
     }
 
 
 # ─────────────────────────────────────────────
-# SENSITIVITY ANALYSIS 1: Starting Depletion Level
+# RUN ALL STRATEGIES — returns dict keyed A/B/C/D
+# app.py accesses results[key].costs, .mean, .std, .p95, .p99 etc.
+# ─────────────────────────────────────────────
+def run_all_strategies(
+    N:               int   = 100_000,
+    batch_size:      int   = 8,
+    gbm_S0:          float = 80.0,
+    gbm_mu:          float = 0.4,
+    gbm_sigma:       float = 0.6,
+    gbm_T:           int   = 30,
+    threshold:       float = 60.0,
+    resale_discount: float = 0.4,
+    seed:            Optional[int] = None,
+    **kwargs,
+) -> dict:
+    """
+    Run all four purchase strategies and return SimulationResult objects.
+    Each result exposes .costs (ndarray), .mean, .median, .std, .p95, .p99,
+    .prob_over_200/500/1000, and .summary_dict().
+    """
+    rng       = np.random.default_rng(seed)
+    pool_data = load_stock()
+    snapshot  = pool_data["stock"].copy()
+    total_left = pool_data["total_remaining"]
+
+    label_map = {
+        "A": f"A — Gambler (1×)",
+        "B": f"B — Whale (12×)",
+        "C": f"C — Patient Buyer",
+        "D": f"D — Calculated ({batch_size}×)",
+    }
+
+    results = {}
+
+    for key in ["A", "B", "C", "D"]:
+        r = SimulationResult()
+        r["label"] = label_map[key]
+
+        if key == "A":
+            r.costs = _simulate_strategy_a(snapshot, total_left, N, rng)
+        elif key == "B":
+            r.costs = _simulate_strategy_b(snapshot, total_left, N, rng)
+        elif key == "C":
+            r.costs = _simulate_strategy_c(
+                snapshot, total_left, N, rng,
+                gbm_S0, gbm_mu, gbm_sigma, gbm_T, threshold
+            )
+        elif key == "D":
+            r.costs = _simulate_strategy_d(snapshot, total_left, N, rng, batch_size)
+
+        results[key] = r
+
+    return results
+
+
+# ─────────────────────────────────────────────
+# GBM DISPLAY — returns np.ndarray shape (n_display, T+1)
+# app.py does: paths.shape, paths.mean(axis=0), np.percentile(paths, p, axis=0)
+# ─────────────────────────────────────────────
+def run_gbm_display(
+    S0:        float = 80.0,
+    mu:        float = 0.4,
+    sigma:     float = 0.6,
+    T:         int   = 30,
+    n_display: int   = 300,
+    seed:      Optional[int] = None,
+) -> np.ndarray:
+    """
+    Simulate n_display independent GBM price paths each of length T+1.
+    Returns ndarray of shape (n_display, T+1).
+
+    GBM: S_{t+1} = S_t * exp[(μ - σ²/2)Δt + σ√Δt · Z],  Z ~ N(0,1)
+    """
+    rng = np.random.default_rng(seed)
+    dt  = 1.0 / 252  # daily steps (trading-day convention)
+
+    # Shape: (n_display, T) — one shock per path per day
+    shocks   = rng.standard_normal((n_display, T))
+    log_rets = (mu - 0.5 * sigma**2) * dt + sigma * np.sqrt(dt) * shocks
+
+    # Build price paths: prepend S0 column, then cumulative product
+    paths        = np.empty((n_display, T + 1), dtype=float)
+    paths[:, 0]  = S0
+    paths[:, 1:] = S0 * np.exp(np.cumsum(log_rets, axis=1))
+
+    return paths
+
+
+# ─────────────────────────────────────────────
+# SHELF CONDITIONAL — called as shelf_conditional(n_taken, rng)
+# app.py: result_shelf = shelf_conditional(n_taken, rng_shelf)
+#         result_shelf['verdict'], ['n_remaining'], ['p_secret_remaining']
+# ─────────────────────────────────────────────
+def shelf_conditional(n_taken: int, rng: np.random.Generator) -> dict:
+    """
+    Compute conditional P(secret still on shelf | n_taken boxes already gone).
+    Analytically exact (no Monte Carlo needed for this simple case).
+
+    Uses hypergeometric reasoning:
+      - Full batch = 72 boxes, 1 secret
+      - n_taken boxes removed (each uniformly at random from remaining pool)
+      - P(secret still present) = (72 - n_taken) / 72  if n_taken ≤ 71
+    """
+    n_taken      = min(n_taken, 71)
+    n_remaining  = 72 - n_taken
+    p_secret     = 1 / 72  # unconditional
+
+    # Conditional on secret not yet found:
+    # P(secret in remaining | secret not in first n_taken) = 1/n_remaining
+    # But we don't know if it was taken — P(secret still here) = (72-n_taken)/72
+    p_secret_remaining = n_remaining / 72
+
+    if n_taken == 0:
+        verdict = "🟢 Fresh shelf — full odds in play."
+    elif p_secret_remaining > 0.5:
+        verdict = "🟡 Some boxes gone, but secret likely still here."
+    elif p_secret_remaining > 0:
+        verdict = "🔴 Heavily depleted — secret may already be gone."
+    else:
+        verdict = "❌ Pool exhausted — no boxes remain."
+
+    return {
+        "n_taken":              n_taken,
+        "n_remaining":          n_remaining,
+        "p_secret_remaining":   p_secret_remaining,
+        "p_secret_conditional": (1 / n_remaining) if n_remaining > 0 else 0.0,
+        "verdict":              verdict,
+    }
+
+
+# ─────────────────────────────────────────────
+# SIMULATE SHELF SCENARIOS — called as simulate_shelf_scenarios(N, rng)
+# app.py: p_cond = simulate_shelf_scenarios(10_000, rng2)
+#         expects np.ndarray of float values (p_secret_remaining per scenario)
+# ─────────────────────────────────────────────
+def simulate_shelf_scenarios(N: int, rng: np.random.Generator) -> np.ndarray:
+    """
+    Simulate N random walk-in scenarios. For each scenario:
+      - Draw a random number of boxes already taken (0–71)
+      - Compute p_secret_remaining for that depletion level
+    Returns np.ndarray of shape (N,) with p_secret_remaining values.
+
+    Each value is P(secret still in pool | n_taken boxes already gone).
+    Marginal mean = 0.5 over uniform n_taken ~ [0,71].
+    """
+    # Random number of boxes already taken for each scenario
+    n_taken_arr = rng.integers(0, 72, size=N)  # 0 to 71 inclusive
+
+    # p_secret_remaining = (72 - n_taken) / 72
+    p_cond = (72 - n_taken_arr) / 72.0
+    return p_cond
+
+
+# ─────────────────────────────────────────────
+# GENERATE SEALED CASE — called as generate_sealed_case(rng)
+# app.py: case = generate_sealed_case(rng_case)  →  list of 12 figure-name strings
+# ─────────────────────────────────────────────
+def generate_sealed_case(rng: np.random.Generator) -> list:
+    """
+    Generate one physical sealed case of 12 boxes.
+    - 1-in-6 chance it is a secret case (11 regulars + 1 Golden Labubu ✦)
+    - 5-in-6 chance it is a normal case (base set of 6 + 6 random extras)
+    Returns list of 12 figure-name strings.
+    """
+    is_secret_case = rng.random() < (1 / 6)
+
+    if is_secret_case:
+        boxes = list(rng.choice(FIGURE_NAMES[:6], size=11, replace=True)) + ["Golden Labubu ✦"]
+    else:
+        base  = FIGURE_NAMES[:6].copy()
+        extra = list(rng.choice(FIGURE_NAMES[:6], size=6, replace=True))
+        boxes = base + extra
+
+    rng.shuffle(boxes)
+    return boxes
+
+
+# ─────────────────────────────────────────────
+# SENSITIVITY ANALYSIS 1 — Starting Depletion Level
 # ─────────────────────────────────────────────
 def sensitivity_depletion_level(
-    depletion_levels: list = None,
-    N:   int = 50_000,
-    seed: Optional[int] = None,
+    depletion_levels: list         = None,
+    N:                int          = 50_000,
+    seed:             Optional[int] = None,
 ) -> list:
     """
-    Sensitivity Analysis 1: Gandaria City Shelf Problem.
     Varies how many boxes were already taken before the user arrives.
+    Shows how conditional probability and required budget change.
     """
     if depletion_levels is None:
         depletion_levels = [0, 12, 24, 36, 48, 60, 71]
 
-    rng = np.random.default_rng(seed)
-
-    from stock_manager import _generate_fresh_batch
-    fresh       = _generate_fresh_batch(seed=seed)
-    full_stock  = fresh["stock"].copy()
-
-    results = []
+    rng        = np.random.default_rng(seed)
+    fresh      = _generate_fresh_batch(seed=seed)
+    full_stock = fresh["stock"].copy()
+    results    = []
 
     for n_taken in depletion_levels:
         taken_stock = full_stock.copy()
@@ -286,21 +544,7 @@ def sensitivity_depletion_level(
             })
             continue
 
-        boxes_needed = np.zeros(N, dtype=np.int64)
-        for trial in range(N):
-            trial_stock = taken_stock.copy()
-            pulls = 0
-            while True:
-                fig = _draw_from_pool(trial_stock, rng)
-                if fig is None:
-                    pulls = pool_remaining
-                    break
-                pulls += 1
-                if fig == "Golden Labubu ✦":
-                    break
-            boxes_needed[trial] = pulls
-
-        costs = boxes_needed * BOX_PRICE
+        costs = _simulate_strategy_a(taken_stock, pool_remaining, N, rng)
         results.append({
             "n_taken":        n_taken,
             "pool_remaining": pool_remaining,
@@ -315,16 +559,16 @@ def sensitivity_depletion_level(
 
 
 # ─────────────────────────────────────────────
-# SENSITIVITY ANALYSIS 2: Confidence Threshold Curve
+# SENSITIVITY ANALYSIS 2 — Confidence Threshold Curve
 # ─────────────────────────────────────────────
 def sensitivity_confidence_curve(
-    target_figure: str = "Golden Labubu ✦",
-    N:    int = 100_000,
-    seed: Optional[int] = None,
+    target_figure: str         = "Golden Labubu ✦",
+    N:             int         = 100_000,
+    seed:          Optional[int] = None,
 ) -> dict:
     """
-    Sensitivity Analysis 2: Budget vs. Confidence Threshold.
-    Derives the full confidence curve from empirical CDF.
+    Derive the full budget-vs-confidence curve from empirical CDF.
+    Returns confidence_levels list, budget_required list, key_points dict.
     """
     confidence_list = [round(c, 2) for c in np.arange(0.01, 1.00, 0.01)]
 
@@ -338,19 +582,16 @@ def sensitivity_confidence_curve(
     if result["target_gone"]:
         return result
 
-    confidence_arr = np.array(confidence_list)
-    budget_arr     = np.array([
-        result["budget_for_confidence"][c] for c in confidence_list
-    ])
-
-    key_points = {}
-    for c in [0.50, 0.80, 0.90, 0.95, 0.99]:
-        key_points[c] = float(np.percentile(result["cost_distribution"], c * 100))
+    budget_arr = np.array([result["budget_for_confidence"][c] for c in confidence_list])
+    key_points = {
+        c: float(np.percentile(result["cost_distribution"], c * 100))
+        for c in [0.50, 0.80, 0.90, 0.95, 0.99]
+    }
 
     return {
         "target_gone":       False,
         "target_figure":     target_figure,
-        "confidence_levels": confidence_arr.tolist(),
+        "confidence_levels": confidence_list,
         "budget_required":   budget_arr.tolist(),
         "key_points":        key_points,
         "mean_cost":         result["mean_cost"],
@@ -365,10 +606,7 @@ def sensitivity_confidence_curve(
 # STANDARD ERROR (for paper defence)
 # ─────────────────────────────────────────────
 def compute_standard_error(costs: np.ndarray) -> dict:
-    """
-    Compute 95% CI for the mean cost estimate.
-    95% CI = mean ± 1.96 × (std / sqrt(N))
-    """
+    """Compute 95% CI for the mean cost estimate: mean ± 1.96 × (σ/√N)"""
     N    = len(costs)
     mean = float(np.mean(costs))
     std  = float(np.std(costs))
@@ -384,275 +622,3 @@ def compute_standard_error(costs: np.ndarray) -> dict:
         "ci95_width": ci_w * 2,
         "error_pct":  (se / mean * 100) if mean > 0 else 0,
     }
-
-# ─────────────────────────────────────────────
-# STRATEGY COORDINATOR (Fixes the ImportError)
-# ─────────────────────────────────────────────
-# ────────────────────────────────────────────────────────────────
-# ROBUST STRATEGY COORDINATOR (Fixes the app.py TypeError)
-# ────────────────────────────────────────────────────────────────
-# ────────────────────────────────────────────────────────────────
-# COMPATIBLE STRATEGY COORDINATOR (Fixes KeyError: 'A')
-# ────────────────────────────────────────────────────────────────
-# ────────────────────────────────────────────────────────────────
-# FINAL COMPATIBLE STRATEGY COORDINATOR
-# ────────────────────────────────────────────────────────────────
-# ────────────────────────────────────────────────────────────────
-# VALUE-SAFE STRATEGY COORDINATOR (Fixes ValueError)
-# ────────────────────────────────────────────────────────────────
-# ────────────────────────────────────────────────────────────────
-# ALL-INCLUSIVE STRATEGY COORDINATOR (Fixes KeyError: 'D')
-# ────────────────────────────────────────────────────────────────
-def run_all_strategies(
-    target_figure: str = "Golden Labubu ✦",
-    N: int = 50_000,
-    seed: Optional[int] = None,
-    **kwargs,
-) -> dict:
-    """
-    Executes analyses and returns a complete strategy matrix (A, B, C, D) 
-    to fully satisfy the rendering loop in app.py.
-    """
-    batch_size = kwargs.get("batch_size", 12)
-
-    # 1. Compute baseline simulations
-    base_sim = sensitivity_confidence_curve(target_figure=target_figure, N=N, seed=seed)
-    
-    if base_sim.get("target_gone", False):
-        return {
-            "target_gone": True,
-            "message": base_sim.get("message", "Target is no longer in the pool.")
-        }
-        
-    depletion_sim = sensitivity_depletion_level(N=N, seed=seed)
-    stats_summary = compute_standard_error(base_sim["cost_distribution"])
-    shelf_scenario = simulate_shelf_scenarios(initial_shelf_count=batch_size, trials=10_000, seed=seed)
-    
-    # Wrap standard dictionaries
-    strategy_a = SimulationResult(base_sim)
-    strategy_c = SimulationResult(shelf_scenario)
-    
-    # Handle the depletion array safely for Strategy B
-    strategy_b = SimulationResult()
-    strategy_b["raw_data"] = depletion_sim
-    if isinstance(depletion_sim, (list, np.ndarray)) and len(depletion_sim) > 0:
-        try:
-            strategy_b["mean"] = float(np.mean(depletion_sim))
-        except Exception:
-            strategy_b["mean"] = strategy_a.mean
-    else:
-        strategy_b["mean"] = strategy_a.mean
-
-    # 🌟 FIX: Add Strategy D (Case Buying / Alternative Strategy)
-    # If your engine has a specific case simulator function, you can run it here.
-    # Otherwise, we seed it with valid fallback statistical numbers to prevent UI crashes.
-    strategy_d = SimulationResult()
-    strategy_d["mean"] = CASE_PRICE if 'CASE_PRICE' in globals() else 180.0
-    strategy_d["median"] = strategy_d["mean"]
-    strategy_d["std"] = 0.0
-    
-    return {
-        "target_gone": False,
-        "A": strategy_a,
-        "B": strategy_b,
-        "C": strategy_c,
-        "D": strategy_d,        #  FIX: Satisfies the final loop check!
-        "metrics": stats_summary,
-        "base_simulation": strategy_a,
-        "depletion_analysis": depletion_sim,
-        "statistical_metrics": stats_summary,
-        "shelf_scenario": strategy_c,
-    }
-
-# ─────────────────────────────────────────────
-# GBM MARKETPLACE TRACKER (Fixes the ImportError)
-# ─────────────────────────────────────────────
-# ────────────────────────────────────────────────────────────────
-# UPDATED GBM MARKETPLACE TRACKER (Fixes the app.py TypeError)
-# ────────────────────────────────────────────────────────────────
-def run_gbm_display(
-    S0: float = 15.0,        #  FIXED: Matches gbm_S0 from app.py
-    mu: float = 0.15,
-    sigma: float = 0.25,
-    T: float = 1.0,          #  FIXED: Matches gbm_T from app.py (Time horizon)
-    n_display: int = 300,    #  FIXED: Matches n_display path steps from app.py
-    seed: Optional[int] = None
-) -> dict:
-    """
-    Simulates secondary market price tracking for rare figures using a 
-    Geometric Brownian Motion (GBM) stochastic process model based on parameters from app.py.
-    """
-    rng = np.random.default_rng(seed)
-    
-    # Calculate step size based on total display intervals
-    dt = float(T) / n_display
-    time_steps = np.arange(n_display + 1)
-    
-    # Generate standard normal random shocks for the trajectory path
-    shocks = rng.normal(0, 1, n_display)
-    
-    # Process log returns according to standard GBM:
-    # dS = mu*S*dt + sigma*S*dWt
-    log_returns = (mu - 0.5 * sigma**2) * dt + sigma * np.sqrt(dt) * shocks
-    
-    price_path = np.zeros(n_display + 1)
-    price_path[0] = S0
-    
-    for t in range(1, n_display + 1):
-        price_path[t] = price_path[t-1] * np.exp(log_returns[t-1])
-        
-    return {
-        "time_steps": time_steps.tolist(),
-        "price_trajectory": price_path.tolist(),
-        "final_price": float(price_path[-1]),
-        "max_price": float(np.max(price_path)),
-        "min_price": float(np.min(price_path))
-    }
-
-# ─────────────────────────────────────────────
-# SHELF DEPLETION SCENARIOS (Fixes the ImportError)
-# ─────────────────────────────────────────────
-def simulate_shelf_scenarios(
-    initial_shelf_count: int = 12,
-    trials: int = 10_000,
-    seed: Optional[int] = None
-) -> dict:
-    """
-    Simulates specifically how the risk profile changes across different initial 
-    shelf availability states (e.g., pulling from a fresh case vs. a picked-over shelf).
-    """
-    rng = np.random.default_rng(seed)
-    
-    # Track success markers and pull distributions under the target scenario
-    successful_trials = 0
-    pulls_required_list = []
-    
-    for _ in range(trials):
-        # Create a mock local snapshot copy of a shelf
-        # Let's mirror a typical 12-box case layout configuration
-        stock_snapshot = {f: 1 for f in FIGURE_NAMES[:6]}  # base regulars
-        # Balance out remainder up to the simulated shelf configuration
-        if initial_shelf_count > 6:
-            extra_count = initial_shelf_count - 6
-            for idx in range(extra_count):
-                reg_name = FIGURE_NAMES[idx % 6]
-                stock_snapshot[reg_name] += 1
-                
-        # Run local finite-shelf extraction experiment
-        local_pulls = 0
-        found = False
-        
-        while initial_shelf_count > 0:
-            # Recompute local discrete empirical CDF values
-            available_figs = [f for f in FIGURE_NAMES if stock_snapshot.get(f, 0) > 0]
-            if not available_figs:
-                break
-                
-            counts = np.array([stock_snapshot[f] for f in available_figs], dtype=float)
-            probs = counts / counts.sum()
-            cdf = np.cumsum(probs)
-            
-            U = rng.uniform(0.0, 1.0)
-            drawn_idx = int(np.searchsorted(cdf, U, side="left"))
-            drawn_idx = min(drawn_idx, len(available_figs) - 1)
-            
-            pulled_fig = available_figs[drawn_idx]
-            stock_snapshot[pulled_fig] -= 1
-            local_pulls += 1
-            
-            # Change criteria if targeting a specific benchmark figure
-            if pulled_fig == "Golden Labubu ✦":
-                found = True
-                break
-                
-        if found:
-            successful_trials += 1
-            pulls_required_list.append(local_pulls)
-            
-    avg_pulls = float(np.mean(pulls_required_list)) if pulls_required_list else 0.0
-    success_rate = float(successful_trials / trials)
-    
-    return {
-        "scenario_shelf_count": initial_shelf_count,
-        "empirical_success_rate": success_rate,
-        "average_pulls_to_success": avg_pulls,
-        "trials_evaluated": trials
-    }
-
-# ─────────────────────────────────────────────
-# CONDITIONAL PROBABILITY STUDY (Fixes the ImportError)
-# ─────────────────────────────────────────────
-def shelf_conditional(
-    initial_opened: int = 12,
-    trials: int = 10_000,
-    seed: Optional[int] = None
-) -> dict:
-    """
-    Computes the conditional probability P(Secret Remaining | X boxes opened 
-    and Secret not found yet) using a Monte Carlo simulation.
-    """
-    rng = np.random.default_rng(seed)
-    
-    valid_universes = 0  # Timelines where secret wasn't drawn in the first X boxes
-    secret_still_there = 0  # Timelines where the secret is still on the shelf
-    
-    for _ in range(trials):
-        # Generate a standard random factory batch configuration mapping
-        # 1 secret case (11 regulars + 1 secret), 5 normal cases (12 regulars)
-        stock_snapshot = {f: 11 for f in FIGURE_NAMES[:6]}
-        stock_snapshot["Golden Labubu ✦"] = 1
-        
-        # Flatten the batch to a list of 72 physical items and shuffle them
-        flat_pool = []
-        for fig, count in stock_snapshot.items():
-            flat_pool.extend([fig] * count)
-        rng.shuffle(flat_pool)
-        
-        # Look at the first 'initial_opened' boxes that were drawn from the batch
-        first_drawn_slice = flat_pool[:initial_opened]
-        remaining_slice = flat_pool[initial_opened:]
-        
-        # Condition: The secret MUST NOT be in the boxes that were already opened
-        if "Golden Labubu ✦" not in first_drawn_slice:
-            valid_universes += 1
-            
-            # Out of those valid timelines, see if the secret is in the remaining pool
-            if "Golden Labubu ✦" in remaining_slice:
-                secret_still_there += 1
-                
-    # Conditional Probability calculation
-    conditional_prob = float(secret_still_there / valid_universes) if valid_universes > 0 else 0.0
-    
-    return {
-        "initial_opened_count": initial_opened,
-        "valid_sample_universes": valid_universes,
-        "conditional_probability_remaining": conditional_prob,
-        "trials_run": trials
-    }
-
-# ────────────────────────────────────────────────────────────────
-# SEALED CASE GENERATOR (Fixes the ImportError)
-# ────────────────────────────────────────────────────────────────
-def generate_sealed_case(
-    has_secret: bool = False,
-    seed: Optional[int] = None
-) -> list:
-    """
-    Simulates generating a single physical sealed case of 12 blind boxes.
-    - Normal case: 12 regulars (guarantees at least one of each of the 6 regular types)
-    - Secret case: 11 assorted regulars + 1 'Golden Labubu ✦'
-    """
-    rng = np.random.default_rng(seed)
-    
-    if has_secret:
-        # 11 assorted regulars + 1 secret figure
-        regulars = list(rng.choice(FIGURE_NAMES[:6], size=11, replace=True))
-        case_boxes = regulars + ["Golden Labubu ✦"]
-    else:
-        # Normal case configuration: 6 core base figures + 6 random duplicates
-        base_set = FIGURE_NAMES[:6].copy()
-        extra_set = list(rng.choice(FIGURE_NAMES[:6], size=6, replace=True))
-        case_boxes = base_set + extra_set
-        
-    rng.shuffle(case_boxes)
-    return case_boxes
