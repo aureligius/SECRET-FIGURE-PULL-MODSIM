@@ -414,18 +414,12 @@ else:
             r = results[key]
             # Sample 5000 for box plot speed
             sample = np.random.choice(r.costs, size=5000, replace=False)
-            # Convert hex to rgba for Plotly Box compatibility
-            def hex_to_rgba(hex_color, alpha=0.2):
-                hex_color = hex_color.lstrip('#')
-                r, g, b = tuple(int(hex_color[i:i+2], 16) for i in (0, 2, 4))
-                return f"rgba({r},{g},{b},{alpha})"
-
             fig2.add_trace(go.Box(
                 y=np.clip(sample, 0, r.p99),
                 name=label[key],
                 marker_color=PALETTE[key],
                 line_color=PALETTE[key],
-                fillcolor=hex_to_rgba(PALETTE[key], alpha=0.2),
+                fillcolor=PALETTE[key] + "33",
                 boxmean=True,
             ))
 

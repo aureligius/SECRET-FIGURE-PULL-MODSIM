@@ -1,1275 +1,398 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Labubu — Blind Box Simulator</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com" />
-  <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@700;900&family=DM+Sans:wght@300;400;500;600&display=swap" rel="stylesheet" />
-
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.9.0/p5.min.js"></script>
   <style>
-    /* ===================================================
-       CSS CUSTOM PROPERTIES — Design Tokens
-    =================================================== */
-    :root {
-      --cream:       #fdf6ef;
-      --blush:       #f7c5c5;
-      --mint:        #b8f0e6;
-      --lavender:    #d9c9f5;
-      --peach:       #ffd9b3;
-      --gold:        #f6c94e;
-      --gold-deep:   #e0a800;
-      --pop-pink:    #ff6b9d;
-      --pop-blue:    #3ec6e0;
-      --dark:        #1a1220;
-      --dark-soft:   #2e2038;
-      --text-main:   #2e2038;
-      --text-muted:  #8a7a9b;
-      --glass-bg:    rgba(255,255,255,0.55);
-      --glass-border:rgba(255,255,255,0.75);
-      --shadow-soft: 0 8px 32px rgba(90,60,120,0.10);
-      --shadow-card: 0 4px 24px rgba(90,60,120,0.13);
-      --radius-xl:   24px;
-      --radius-lg:   16px;
-      --radius-md:   12px;
-      --radius-sm:   8px;
-    }
-
-    /* ===================================================
-       RESET & BASE
-    =================================================== */
-    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-
+    * { margin: 0; padding: 0; box-sizing: border-box; }
     body {
-      font-family: 'DM Sans', sans-serif;
-      background: var(--cream);
-      color: var(--text-main);
-      min-height: 100vh;
-      overflow-x: hidden;
-    }
-
-    /* Decorative background blobs */
-    body::before {
-      content: '';
-      position: fixed; inset: 0; z-index: 0; pointer-events: none;
-      background:
-        radial-gradient(ellipse 60% 40% at 15% 10%, #f7c5c580 0%, transparent 70%),
-        radial-gradient(ellipse 50% 35% at 85% 20%, #b8f0e660 0%, transparent 70%),
-        radial-gradient(ellipse 40% 50% at 70% 85%, #d9c9f550 0%, transparent 70%),
-        radial-gradient(ellipse 45% 30% at 10% 75%, #ffd9b340 0%, transparent 70%);
-    }
-
-    /* ===================================================
-       LAYOUT WRAPPERS
-    =================================================== */
-    .app-root {
-      position: relative; z-index: 1;
-      max-width: 1100px;
-      margin: 0 auto;
-      padding: 32px 20px 80px;
-    }
-
-    /* ===================================================
-       GLASSMORPHISM CARD MIXIN
-    =================================================== */
-    .glass {
-      background: var(--glass-bg);
-      backdrop-filter: blur(18px) saturate(180%);
-      -webkit-backdrop-filter: blur(18px) saturate(180%);
-      border: 1.5px solid var(--glass-border);
-      border-radius: var(--radius-xl);
-      box-shadow: var(--shadow-soft);
-    }
-
-    /* ===================================================
-       HEADER
-    =================================================== */
-    .header {
-      text-align: center;
-      margin-bottom: 40px;
-    }
-
-    .header-eyebrow {
-      display: inline-block;
-      font-size: 11px;
-      font-weight: 600;
-      letter-spacing: 0.18em;
-      text-transform: uppercase;
-      color: var(--pop-pink);
-      background: rgba(255,107,157,0.10);
-      border: 1px solid rgba(255,107,157,0.25);
-      padding: 5px 14px;
-      border-radius: 100px;
-      margin-bottom: 14px;
-    }
-
-    .header h1 {
-      font-family: 'Playfair Display', serif;
-      font-size: clamp(2.8rem, 6vw, 4.2rem);
-      font-weight: 900;
-      line-height: 1.05;
-      color: var(--text-main);
-      letter-spacing: -0.02em;
-    }
-
-    .header h1 span {
-      background: linear-gradient(135deg, var(--pop-pink), var(--lavender) 50%, var(--pop-blue));
-      -webkit-background-clip: text;
-      -webkit-text-fill-color: transparent;
-      background-clip: text;
-    }
-
-    .header p {
-      margin-top: 10px;
-      font-size: 15px;
-      color: var(--text-muted);
-      font-weight: 400;
-    }
-
-    /* ===================================================
-       MAIN GRID
-    =================================================== */
-    .main-grid {
-      display: grid;
-      grid-template-columns: 1fr 340px;
-      gap: 28px;
-      align-items: start;
-    }
-
-    @media (max-width: 820px) {
-      .main-grid { grid-template-columns: 1fr; }
-    }
-
-    /* ===================================================
-       STAGE — BOX OPENING AREA
-    =================================================== */
-    .stage-panel {
-      padding: 40px 32px 36px;
+      background: transparent;
       display: flex;
-      flex-direction: column;
-      align-items: center;
-      gap: 28px;
-    }
-
-    /* ---- The Box ---- */
-    .box-wrap {
-      position: relative;
-      width: 180px;
-      height: 180px;
-      cursor: pointer;
-      perspective: 600px;
-    }
-
-    .box-svg {
-      width: 100%;
-      height: 100%;
-      position: relative;
-      z-index: 2;
-      transform-origin: center bottom;
-      transition: filter 0.3s;
-    }
-
-    /* Shake keyframe */
-    @keyframes shake {
-      0%,100% { transform: rotate(0deg) translateX(0); }
-      10%      { transform: rotate(-6deg) translateX(-6px); }
-      20%      { transform: rotate(6deg)  translateX(6px); }
-      30%      { transform: rotate(-5deg) translateX(-5px); }
-      40%      { transform: rotate(5deg)  translateX(5px); }
-      50%      { transform: rotate(-4deg) translateX(-4px); }
-      60%      { transform: rotate(4deg)  translateX(4px); }
-      70%      { transform: rotate(-3deg) translateX(-3px); }
-      80%      { transform: rotate(3deg)  translateX(3px); }
-      90%      { transform: rotate(-1deg) translateX(-1px); }
-    }
-
-    @keyframes boxPop {
-      0%   { transform: scale(1); }
-      40%  { transform: scale(1.18) rotate(-3deg); }
-      60%  { transform: scale(0.92) rotate(2deg); }
-      80%  { transform: scale(1.07); }
-      100% { transform: scale(1); }
-    }
-
-    .box-wrap.shaking .box-svg  { animation: shake 0.7s ease-in-out; }
-    .box-wrap.popping .box-svg  { animation: boxPop 0.5s cubic-bezier(0.36,0.07,0.19,0.97); }
-
-    /* Glow ring under box (idle pulse) */
-    .box-glow {
-      position: absolute;
-      bottom: -18px; left: 50%;
-      transform: translateX(-50%);
-      width: 120px; height: 30px;
-      border-radius: 50%;
-      background: radial-gradient(ellipse, rgba(255,107,157,0.35) 0%, transparent 75%);
-      animation: glowPulse 2.4s ease-in-out infinite;
-      z-index: 1;
-    }
-
-    @keyframes glowPulse {
-      0%,100% { opacity: 0.5; transform: translateX(-50%) scaleX(1); }
-      50%      { opacity: 1;   transform: translateX(-50%) scaleX(1.2); }
-    }
-
-    /* ---- Reveal Card ---- */
-    .reveal-card {
-      display: none;
-      flex-direction: column;
-      align-items: center;
-      gap: 12px;
-      animation: revealIn 0.5s cubic-bezier(0.34,1.56,0.64,1) both;
-    }
-
-    @keyframes revealIn {
-      from { opacity: 0; transform: scale(0.7) translateY(20px); }
-      to   { opacity: 1; transform: scale(1) translateY(0); }
-    }
-
-    .reveal-card.visible { display: flex; }
-
-    .reveal-badge {
-      padding: 14px 28px;
-      border-radius: var(--radius-lg);
-      font-family: 'Playfair Display', serif;
-      font-size: 22px;
-      font-weight: 700;
-      text-align: center;
-      color: var(--dark);
-      min-width: 240px;
-      position: relative;
-      overflow: hidden;
-    }
-
-    .reveal-badge.secret {
-      background: linear-gradient(135deg, #fffbe6, #ffe066, #ffd700, #ffe066, #fffbe6);
-      background-size: 300% 300%;
-      animation: goldShift 1.8s ease infinite;
-      box-shadow: 0 0 40px 10px rgba(246,201,78,0.55), 0 4px 20px rgba(0,0,0,0.12);
-      border: 2px solid #f6c94e;
-    }
-
-    @keyframes goldShift {
-      0%,100% { background-position: 0% 50%; }
-      50%      { background-position: 100% 50%; }
-    }
-
-    .reveal-badge.regular {
-      background: var(--glass-bg);
-      border: 1.5px solid var(--glass-border);
-      box-shadow: var(--shadow-card);
-    }
-
-    .reveal-label {
-      font-size: 11px;
-      font-weight: 600;
-      letter-spacing: 0.14em;
-      text-transform: uppercase;
-      color: var(--text-muted);
-    }
-
-    .reveal-label.secret-label {
-      color: var(--gold-deep);
-      letter-spacing: 0.18em;
-    }
-
-    /* Sparkle overlay for SECRET */
-    .sparkles-wrap {
-      position: absolute;
-      inset: 0;
-      pointer-events: none;
-      overflow: hidden;
-      border-radius: var(--radius-lg);
-    }
-
-    .sparkle {
-      position: absolute;
-      width: 6px; height: 6px;
-      border-radius: 50%;
-      background: #fff;
-      animation: sparklePop var(--dur, 1s) ease-out var(--del, 0s) infinite;
-    }
-
-    @keyframes sparklePop {
-      0%   { opacity: 0; transform: scale(0) translate(0,0); }
-      40%  { opacity: 1; transform: scale(1) translate(var(--tx, 0px), var(--ty, 0px)); }
-      100% { opacity: 0; transform: scale(0) translate(var(--tx2, 0px), var(--ty2, 0px)); }
-    }
-
-    /* ---- Action Buttons ---- */
-    .btn-row {
-      display: flex;
-      gap: 14px;
-      flex-wrap: wrap;
-      justify-content: center;
-    }
-
-    .btn {
-      font-family: 'DM Sans', sans-serif;
-      font-size: 14px;
-      font-weight: 600;
-      padding: 14px 28px;
-      border-radius: 100px;
-      border: none;
-      cursor: pointer;
-      transition: transform 0.15s, box-shadow 0.15s, opacity 0.15s;
-      letter-spacing: 0.02em;
-      position: relative;
-      overflow: hidden;
-    }
-
-    .btn:active { transform: scale(0.95); }
-    .btn:disabled { opacity: 0.45; cursor: not-allowed; }
-
-    .btn-primary {
-      background: linear-gradient(135deg, var(--pop-pink), #e0559a);
-      color: #fff;
-      box-shadow: 0 4px 20px rgba(255,107,157,0.45);
-    }
-    .btn-primary:hover:not(:disabled) {
-      transform: translateY(-2px);
-      box-shadow: 0 8px 28px rgba(255,107,157,0.55);
-    }
-
-    .btn-secondary {
-      background: linear-gradient(135deg, var(--pop-blue), #26a8c4);
-      color: #fff;
-      box-shadow: 0 4px 20px rgba(62,198,224,0.4);
-    }
-    .btn-secondary:hover:not(:disabled) {
-      transform: translateY(-2px);
-      box-shadow: 0 8px 28px rgba(62,198,224,0.5);
-    }
-
-    .btn-ghost {
-      background: rgba(255,255,255,0.6);
-      color: var(--text-muted);
-      border: 1.5px solid rgba(200,180,220,0.4);
-    }
-    .btn-ghost:hover:not(:disabled) {
-      background: rgba(255,255,255,0.85);
-      color: var(--text-main);
-    }
-
-    /* btn shine sweep */
-    .btn::after {
-      content: '';
-      position: absolute;
-      top: -50%; left: -75%;
-      width: 50%; height: 200%;
-      background: rgba(255,255,255,0.25);
-      transform: skewX(-20deg);
-      transition: left 0.5s;
-    }
-    .btn:hover::after { left: 130%; }
-
-    /* ===================================================
-       ANALYTICS SIDEBAR
-    =================================================== */
-    .analytics-panel {
-      padding: 28px 24px;
-      display: flex;
-      flex-direction: column;
-      gap: 22px;
-    }
-
-    .panel-title {
-      font-family: 'Playfair Display', serif;
-      font-size: 17px;
-      font-weight: 700;
-      color: var(--text-main);
-      border-bottom: 1px solid rgba(180,150,210,0.2);
-      padding-bottom: 10px;
-    }
-
-    /* KPI Tiles */
-    .kpi-grid {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 12px;
-    }
-
-    .kpi-tile {
-      background: rgba(255,255,255,0.65);
-      border: 1px solid rgba(255,255,255,0.8);
-      border-radius: var(--radius-md);
-      padding: 14px 12px;
-      text-align: center;
-    }
-
-    .kpi-value {
-      font-family: 'Playfair Display', serif;
-      font-size: 24px;
-      font-weight: 700;
-      color: var(--text-main);
-      line-height: 1;
-    }
-
-    .kpi-label {
-      font-size: 11px;
-      font-weight: 500;
-      color: var(--text-muted);
-      margin-top: 4px;
-      letter-spacing: 0.05em;
-    }
-
-    /* Pull Rate Bar */
-    .rate-section {}
-    .rate-label-row {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      margin-bottom: 6px;
-    }
-    .rate-name {
-      font-size: 12px;
-      font-weight: 600;
-      color: var(--text-main);
-    }
-    .rate-pct {
-      font-size: 12px;
-      font-weight: 500;
-      color: var(--text-muted);
-    }
-    .rate-bar-track {
-      height: 8px;
-      border-radius: 100px;
-      background: rgba(180,150,210,0.15);
-      overflow: hidden;
-    }
-    .rate-bar-fill {
-      height: 100%;
-      border-radius: 100px;
-      transition: width 0.6s cubic-bezier(0.34,1.56,0.64,1);
-    }
-    .rate-row { margin-bottom: 10px; }
-
-    /* Last Pull */
-    .last-pull-display {
-      font-size: 13px;
-      color: var(--text-muted);
-      background: rgba(255,255,255,0.45);
-      border-radius: var(--radius-sm);
-      padding: 10px 14px;
-      min-height: 42px;
-      display: flex;
-      align-items: center;
-      gap: 8px;
-    }
-
-    .last-pull-display .dot {
-      width: 10px; height: 10px;
-      border-radius: 50%;
-      flex-shrink: 0;
-    }
-
-    /* ===================================================
-       COLLECTION GRID
-    =================================================== */
-    .collection-section {
-      margin-top: 28px;
-    }
-
-    .collection-header {
-      display: flex;
-      align-items: baseline;
-      gap: 14px;
-      margin-bottom: 18px;
-    }
-
-    .collection-header h2 {
-      font-family: 'Playfair Display', serif;
-      font-size: 22px;
-      font-weight: 700;
-    }
-
-    .collection-sub {
-      font-size: 13px;
-      color: var(--text-muted);
-    }
-
-    .figure-grid {
-      display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
-      gap: 16px;
-    }
-
-    .figure-card {
-      border-radius: var(--radius-lg);
-      padding: 18px 12px 14px;
-      text-align: center;
-      transition: transform 0.25s, box-shadow 0.25s;
-      position: relative;
-      overflow: hidden;
-      cursor: default;
-      /* Locked state */
-      background: rgba(255,255,255,0.3);
-      border: 1.5px solid rgba(255,255,255,0.5);
-      filter: grayscale(0.2);
-    }
-
-    .figure-card.unlocked {
-      background: var(--glass-bg);
-      border: 1.5px solid var(--glass-border);
-      box-shadow: var(--shadow-card);
-      filter: none;
-    }
-
-    .figure-card.unlocked:hover {
-      transform: translateY(-4px) scale(1.03);
-      box-shadow: 0 10px 30px rgba(90,60,120,0.18);
-    }
-
-    .figure-card.secret-card.unlocked {
-      border-color: var(--gold);
-      box-shadow: 0 0 28px rgba(246,201,78,0.45), var(--shadow-card);
-    }
-
-    .figure-card.secret-card.unlocked::before {
-      content: '';
-      position: absolute;
-      inset: 0;
-      background: linear-gradient(135deg, rgba(246,201,78,0.12), transparent 60%);
-      pointer-events: none;
-    }
-
-    .figure-emoji {
-      font-size: 38px;
-      line-height: 1;
-      margin-bottom: 8px;
-      transition: filter 0.3s;
-      display: block;
-    }
-
-    .figure-card:not(.unlocked) .figure-emoji {
-      filter: grayscale(1) opacity(0.4);
-    }
-
-    .figure-name {
-      font-size: 11px;
-      font-weight: 600;
-      color: var(--text-main);
-      margin-bottom: 4px;
-      letter-spacing: 0.02em;
-    }
-
-    .figure-card:not(.unlocked) .figure-name { color: var(--text-muted); }
-
-    .figure-owned-badge {
-      display: inline-block;
-      font-size: 10px;
-      font-weight: 700;
-      letter-spacing: 0.05em;
-      padding: 2px 8px;
-      border-radius: 100px;
-      background: rgba(180,150,210,0.15);
-      color: var(--text-muted);
-      margin-top: 2px;
-    }
-
-    .figure-card.unlocked .figure-owned-badge {
-      background: rgba(62,198,224,0.15);
-      color: var(--pop-blue);
-    }
-
-    .figure-card.secret-card.unlocked .figure-owned-badge {
-      background: rgba(246,201,78,0.25);
-      color: var(--gold-deep);
-    }
-
-    /* NEW badge on first unlock */
-    .new-badge {
-      position: absolute;
-      top: 8px; right: 8px;
-      font-size: 9px;
-      font-weight: 700;
-      letter-spacing: 0.08em;
-      text-transform: uppercase;
-      background: var(--pop-pink);
-      color: #fff;
-      padding: 2px 6px;
-      border-radius: 100px;
-      opacity: 0;
-      transform: scale(0);
-      transition: all 0.3s;
-    }
-
-    .figure-card.just-unlocked .new-badge {
-      opacity: 1;
-      transform: scale(1);
-    }
-
-    /* ===================================================
-       MULTI-PULL RESULTS STRIP (12x pull)
-    =================================================== */
-    .multi-strip {
-      display: none;
-      gap: 8px;
-      flex-wrap: wrap;
-      justify-content: center;
-      padding: 16px;
-      border-radius: var(--radius-lg);
-      background: rgba(255,255,255,0.4);
-      border: 1px solid rgba(255,255,255,0.6);
-      animation: revealIn 0.4s ease both;
-      max-width: 600px;
-      width: 100%;
-    }
-
-    .multi-strip.visible { display: flex; }
-
-    .mini-pill {
-      font-size: 12px;
-      font-weight: 600;
-      padding: 6px 12px;
-      border-radius: 100px;
-      background: var(--glass-bg);
-      border: 1.5px solid var(--glass-border);
-      color: var(--text-main);
-      white-space: nowrap;
-    }
-
-    .mini-pill.secret {
-      background: linear-gradient(135deg, #fff9d6, #ffe566);
-      border-color: var(--gold);
-      color: var(--dark);
-      box-shadow: 0 0 12px rgba(246,201,78,0.5);
-    }
-
-    /* ===================================================
-       SECRET OVERLAY / CELEBRATION
-    =================================================== */
-    .secret-overlay {
-      display: none;
-      position: fixed; inset: 0; z-index: 999;
-      background: rgba(10,5,25,0.75);
-      align-items: center;
-      justify-content: center;
-      flex-direction: column;
-      gap: 20px;
-    }
-
-    .secret-overlay.show { display: flex; animation: overlayFadeIn 0.35s ease both; }
-
-    @keyframes overlayFadeIn {
-      from { opacity: 0; }
-      to   { opacity: 1; }
-    }
-
-    .secret-modal {
-      background: linear-gradient(145deg, #1a0d30, #2e1a50);
-      border: 2px solid var(--gold);
-      border-radius: var(--radius-xl);
-      padding: 48px 52px;
-      text-align: center;
-      max-width: 420px;
-      width: 90%;
-      box-shadow: 0 0 80px rgba(246,201,78,0.4), 0 20px 60px rgba(0,0,0,0.5);
-      animation: modalPop 0.5s cubic-bezier(0.34,1.56,0.64,1) both;
-      position: relative;
-      overflow: hidden;
-    }
-
-    @keyframes modalPop {
-      from { opacity: 0; transform: scale(0.5) rotate(-8deg); }
-      to   { opacity: 1; transform: scale(1) rotate(0deg); }
-    }
-
-    .secret-modal::before {
-      content: '';
-      position: absolute; inset: 0;
-      background: radial-gradient(ellipse at 50% 0%, rgba(246,201,78,0.15) 0%, transparent 65%);
-      pointer-events: none;
-    }
-
-    .secret-modal .star-row { font-size: 32px; margin-bottom: 12px; letter-spacing: 6px; }
-    .secret-modal h2 {
-      font-family: 'Playfair Display', serif;
-      font-size: 32px;
-      font-weight: 900;
-      background: linear-gradient(135deg, #ffe566, #fff8a0, #ffd700);
-      -webkit-background-clip: text;
-      -webkit-text-fill-color: transparent;
-      background-clip: text;
-      margin-bottom: 6px;
-    }
-
-    .secret-modal p {
-      color: rgba(255,255,255,0.65);
-      font-size: 14px;
-      margin-bottom: 24px;
-    }
-
-    .secret-figure-display { font-size: 80px; margin-bottom: 12px; }
-
-    .secret-modal .btn { margin-top: 4px; background: linear-gradient(135deg, var(--gold), var(--gold-deep)); color: var(--dark); box-shadow: 0 4px 20px rgba(246,201,78,0.5); }
-
-    /* Floating confetti pieces */
-    .confetti-piece {
-      position: fixed;
-      width: 10px; height: 10px;
-      pointer-events: none;
-      z-index: 1000;
-      animation: confettiFall var(--dur, 3s) ease-in var(--del, 0s) forwards;
-    }
-
-    @keyframes confettiFall {
-      0%   { transform: translate(var(--sx,0px), -20px) rotate(0deg) scale(1); opacity: 1; }
-      100% { transform: translate(var(--ex,30px), 110vh) rotate(var(--rot,720deg)) scale(0.5); opacity: 0; }
-    }
-
-    /* ===================================================
-       FOOTER / PROBABILITY INFO
-    =================================================== */
-    .prob-info {
-      margin-top: 28px;
-      padding: 20px 24px;
-      border-radius: var(--radius-lg);
-      background: rgba(255,255,255,0.4);
-      border: 1px solid rgba(255,255,255,0.55);
-      display: flex;
-      flex-wrap: wrap;
-      gap: 10px;
       justify-content: center;
       align-items: center;
+      min-height: 320px;
+      font-family: sans-serif;
+      overflow: hidden;
     }
-
-    .prob-chip {
-      font-size: 12px;
-      font-weight: 500;
-      padding: 5px 12px;
-      border-radius: 100px;
-      border: 1px solid rgba(180,150,210,0.25);
-      color: var(--text-muted);
-      background: rgba(255,255,255,0.5);
-    }
-
-    .prob-chip strong { color: var(--text-main); font-weight: 700; }
-
-    /* ===================================================
-       SCROLL ANIMATIONS
-    =================================================== */
-    .fade-up {
-      opacity: 0;
-      transform: translateY(24px);
-      animation: fadeUp 0.55s ease forwards;
-    }
-
-    @keyframes fadeUp {
-      to { opacity: 1; transform: translateY(0); }
-    }
-
-    .delay-1 { animation-delay: 0.1s; }
-    .delay-2 { animation-delay: 0.2s; }
-    .delay-3 { animation-delay: 0.3s; }
-    .delay-4 { animation-delay: 0.4s; }
-    .delay-5 { animation-delay: 0.5s; }
+    #canvas-container { position: relative; }
   </style>
 </head>
 <body>
-
-<div class="app-root">
-
-  <!-- HEADER -->
-  <header class="header fade-up">
-    <div class="header-eyebrow">✦ Limited Series Drop</div>
-    <h1>Labubu <span>Blind Box</span></h1>
-    <p>6 Regulars · 1 Ultra Secret · Test your luck</p>
-  </header>
-
-  <!-- MAIN GRID: Stage + Analytics -->
-  <div class="main-grid">
-
-    <!-- LEFT: STAGE -->
-    <div class="glass stage-panel fade-up delay-2">
-
-      <!-- The Blind Box -->
-      <div class="box-wrap" id="boxWrap" title="Click to open!">
-        <svg class="box-svg" viewBox="0 0 180 180" id="boxSvg" xmlns="http://www.w3.org/2000/svg">
-          <!-- Box Body -->
-          <rect x="20" y="68" width="140" height="100" rx="12" fill="#ff8fc8" stroke="#e0559a" stroke-width="3"/>
-          <!-- Box Lid -->
-          <rect x="14" y="46" width="152" height="34" rx="8" fill="#ff6bb3" stroke="#e0559a" stroke-width="3"/>
-          <!-- Ribbon Vertical -->
-          <rect x="80" y="46" width="20" height="122" rx="6" fill="#ffe566" opacity="0.85"/>
-          <!-- Ribbon Horizontal -->
-          <rect x="14" y="58" width="152" height="18" rx="6" fill="#ffe566" opacity="0.85"/>
-          <!-- Bow Left -->
-          <ellipse cx="76" cy="50" rx="22" ry="12" fill="#ffd700" transform="rotate(-18,76,50)"/>
-          <!-- Bow Right -->
-          <ellipse cx="104" cy="50" rx="22" ry="12" fill="#ffd700" transform="rotate(18,104,50)"/>
-          <!-- Bow Center Knot -->
-          <circle cx="90" cy="50" r="10" fill="#f6c94e" stroke="#e0a800" stroke-width="2"/>
-          <!-- Stars deco on box -->
-          <text x="38" y="120" font-size="20" opacity="0.4" fill="#fff">✦</text>
-          <text x="120" y="150" font-size="16" opacity="0.4" fill="#fff">◆</text>
-          <text x="130" y="100" font-size="12" opacity="0.3" fill="#fff">✦</text>
-        </svg>
-        <div class="box-glow"></div>
-      </div>
-
-      <!-- Reveal Card (hidden until pull) -->
-      <div class="reveal-card" id="revealCard">
-        <div class="reveal-label" id="revealLabel">YOU GOT</div>
-        <div class="reveal-badge" id="revealBadge">
-          <div class="sparkles-wrap" id="sparklesWrap"></div>
-          <span id="revealEmoji" style="font-size:36px; display:block; margin-bottom:6px;"></span>
-          <span id="revealName"></span>
-        </div>
-      </div>
-
-      <!-- Multi-pull Strip -->
-      <div class="multi-strip" id="multiStrip"></div>
-
-      <!-- Action Buttons -->
-      <div class="btn-row">
-        <button class="btn btn-primary" id="btnOpen1" onclick="openBoxes(1)">
-          🎁 Open 1 Box  <span style="opacity:0.75;font-weight:400;">($15)</span>
-        </button>
-        <button class="btn btn-secondary" id="btnOpen12" onclick="openBoxes(12)">
-          📦 Open Case  <span style="opacity:0.75;font-weight:400;">(12x · $180)</span>
-        </button>
-        <button class="btn btn-ghost" onclick="resetAll()">↺ Reset</button>
-      </div>
-
-    </div><!-- /stage-panel -->
-
-    <!-- RIGHT: ANALYTICS -->
-    <div class="glass analytics-panel fade-up delay-3">
-
-      <div class="panel-title">📊 Live Analytics</div>
-
-      <div class="kpi-grid">
-        <div class="kpi-tile">
-          <div class="kpi-value" id="kpiBoxes">0</div>
-          <div class="kpi-label">Boxes Opened</div>
-        </div>
-        <div class="kpi-tile">
-          <div class="kpi-value" id="kpiSpent">$0</div>
-          <div class="kpi-label">Total Spent</div>
-        </div>
-        <div class="kpi-tile">
-          <div class="kpi-value" id="kpiSecrets">0</div>
-          <div class="kpi-label">Secrets Found</div>
-        </div>
-        <div class="kpi-tile">
-          <div class="kpi-value" id="kpiUniqueOwned">0<span style="font-size:14px;color:var(--text-muted)">/7</span></div>
-          <div class="kpi-label">Unique Figures</div>
-        </div>
-      </div>
-
-      <!-- Pull Rate Bars -->
-      <div class="rate-section">
-        <div class="panel-title" style="font-size:14px; border:none; padding-bottom:6px;">Pull Rates</div>
-
-        <div class="rate-row" id="rateRowRegular">
-          <div class="rate-label-row">
-            <span class="rate-name">🌸 Regular Figures</span>
-            <span class="rate-pct" id="ratePctRegular">—</span>
-          </div>
-          <div class="rate-bar-track">
-            <div class="rate-bar-fill" id="rateBarRegular"
-                 style="width:0%; background: linear-gradient(90deg, var(--pop-pink), var(--lavender));"></div>
-          </div>
-        </div>
-
-        <div class="rate-row" id="rateRowSecret">
-          <div class="rate-label-row">
-            <span class="rate-name">⭐ Secret Figure</span>
-            <span class="rate-pct" id="ratePctSecret">—</span>
-          </div>
-          <div class="rate-bar-track">
-            <div class="rate-bar-fill" id="rateBarSecret"
-                 style="width:0%; background: linear-gradient(90deg, var(--gold), var(--gold-deep));"></div>
-          </div>
-        </div>
-      </div>
-
-      <!-- Last Pull -->
-      <div>
-        <div class="panel-title" style="font-size:14px; border:none; padding-bottom:6px;">Last Pull</div>
-        <div class="last-pull-display" id="lastPullDisplay">
-          <span style="opacity:0.4">— nothing yet —</span>
-        </div>
-      </div>
-
-      <!-- Expected vs Actual -->
-      <div>
-        <div class="panel-title" style="font-size:14px; border:none; padding-bottom:4px;">Expected Secret</div>
-        <div style="font-size:13px; color:var(--text-muted); line-height:1.6" id="expectedText">
-          Open some boxes to see expected vs actual secret pulls.
-        </div>
-      </div>
-
-    </div><!-- /analytics-panel -->
-
-  </div><!-- /main-grid -->
-
-  <!-- COLLECTION GRID -->
-  <div class="collection-section fade-up delay-4">
-    <div class="collection-header">
-      <h2>My Collection</h2>
-      <span class="collection-sub" id="collectionSub">0 of 7 unique figures owned</span>
-    </div>
-    <div class="figure-grid" id="figureGrid">
-      <!-- Populated by JS -->
-    </div>
-  </div>
-
-  <!-- PROBABILITY INFO -->
-  <div class="prob-info fade-up delay-5">
-    <div class="prob-chip">Series: <strong>Labubu Vol. I</strong></div>
-    <div class="prob-chip">Regular: <strong>71/432 ≈ 16.44%</strong> each</div>
-    <div class="prob-chip">Secret: <strong>1/72 ≈ 1.39%</strong></div>
-    <div class="prob-chip">Box Price: <strong>$15.00</strong></div>
-    <div class="prob-chip">Total Pool: <strong>7 Figures</strong></div>
-  </div>
-
-</div><!-- /app-root -->
-
-<!-- SECRET OVERLAY -->
-<div class="secret-overlay" id="secretOverlay">
-  <div class="secret-modal">
-    <div class="star-row">✦ ✦ ✦</div>
-    <div class="secret-figure-display" id="secretOverlayEmoji">🌟</div>
-    <h2>SECRET FOUND!</h2>
-    <p>You pulled the ultra-rare <strong id="secretOverlayName" style="color:#ffe566"></strong>!<br/>Probability: only 1 in 72 (~1.39%)</p>
-    <button class="btn" onclick="closeSecretOverlay()">Claim & Continue ✨</button>
-  </div>
-</div>
-
-
+<div id="canvas-container"></div>
 <script>
-  /* =====================================================
-     DATA — Figure definitions
-  ===================================================== */
-  const FIGURES = [
-    { id: 0, name: "Cherry Blossom",   emoji: "🌸", color: "#f7c5c5", isSecret: false },
-    { id: 1, name: "Mint Dream",       emoji: "🍃", color: "#b8f0e6", isSecret: false },
-    { id: 2, name: "Lavender Haze",    emoji: "💜", color: "#d9c9f5", isSecret: false },
-    { id: 3, name: "Peach Glow",       emoji: "🍑", color: "#ffd9b3", isSecret: false },
-    { id: 4, name: "Sky Pop",          emoji: "🩵", color: "#c7eeff", isSecret: false },
-    { id: 5, name: "Coral Bloom",      emoji: "🌺", color: "#ffb3c6", isSecret: false },
-    { id: 6, name: "Golden Labubu ✦", emoji: "⭐", color: "#f6c94e", isSecret: true  },
-  ];
+/* =====================================================
+   OPTION C ARCHITECTURE:
+   - Python runs ALL draw logic
+   - This canvas is a pure one-way DISPLAY
+   - Streamlit passes the result via URL query params:
+       ?figure=Cherry+Blossom&is_secret=false&emoji=🌸&state=reveal
+       state: "idle" | "shaking" | "reveal" | "empty" | "secret"
+   - No postMessage back to Python
+===================================================== */
 
-  /* =====================================================
-     PROBABILITY ENGINE
-     Secret: 1/72 ≈ 0.013888...
-     Each Regular: (71/72)/6 = 71/432 ≈ 0.164351...
-  ===================================================== */
-  const P_SECRET   = 1 / 72;
-  const P_REGULAR  = (71 / 72) / 6;
+// ── Parse URL params ─────────────────────────────────
+function getParam(key, fallback) {
+  const p = new URLSearchParams(window.location.search);
+  return p.has(key) ? p.get(key) : fallback;
+}
 
-  // Build cumulative weight table
-  const CUM_WEIGHTS = (() => {
-    const weights = [];
-    let cum = 0;
-    for (let i = 0; i < 6; i++) { cum += P_REGULAR; weights.push({ id: i, cum }); }
-    cum += P_SECRET;               weights.push({ id: 6, cum });
-    return weights;
-  })();
+const STATE       = getParam("state",     "idle");
+const FIGURE_NAME = decodeURIComponent(getParam("figure", ""));
+const EMOJI       = decodeURIComponent(getParam("emoji",  "🎁"));
+const IS_SECRET   = getParam("is_secret", "false") === "true";
+const BOXES_LEFT  = parseInt(getParam("remaining", "72"));
 
-  function drawFigure() {
-    const r = Math.random();
-    for (const w of CUM_WEIGHTS) {
-      if (r < w.cum) return FIGURES[w.id];
+// ── Colour map for each figure ───────────────────────
+const FIGURE_COLORS = {
+  "Cherry Blossom":  "#f7c5c5",
+  "Mint Dream":      "#b8f0e6",
+  "Lavender Haze":   "#d9c9f5",
+  "Peach Glow":      "#ffd9b3",
+  "Sky Pop":         "#c7eeff",
+  "Coral Bloom":     "#ffb3c6",
+  "Golden Labubu ✦": "#ffe566",
+};
+
+const CARD_COLOR = FIGURE_COLORS[FIGURE_NAME] || "#f0f0f0";
+
+// ── p5 sketch ────────────────────────────────────────
+new p5(function(p) {
+
+  // Animation state
+  let shakeFrame  = 0;
+  let revealAlpha = 0;
+  let sparkles    = [];
+  let goldPulse   = 0;
+
+  // ── Setup ─────────────────────────────────────────
+  p.setup = function() {
+    const cnv = p.createCanvas(520, 300);
+    cnv.parent("canvas-container");
+    p.textAlign(p.CENTER, p.CENTER);
+    p.textFont("Georgia");
+
+    if (STATE === "shaking") shakeFrame = 60;
+
+    // Spawn sparkles for secret reveal
+    if (STATE === "secret" || (STATE === "reveal" && IS_SECRET)) {
+      for (let i = 0; i < 30; i++) {
+        sparkles.push({
+          x:   p.random(p.width),
+          y:   p.random(p.height),
+          vx:  p.random(-2, 2),
+          vy:  p.random(-3, -0.5),
+          size: p.random(4, 10),
+          life: 1.0,
+          col: p.random(["#ffe566","#fff8a0","#ffd700","#ffffff","#ff6b9d"]),
+        });
+      }
     }
-    return FIGURES[6]; // fallback
-  }
-
-  /* =====================================================
-     STATE
-  ===================================================== */
-  const state = {
-    totalOpened:  0,
-    secretsFound: 0,
-    owned:        Array(7).fill(0),  // owned[i] = count of figure i
-    newFlags:     Array(7).fill(false),
   };
 
-  const BOX_PRICE = 15;
+  // ── Draw loop ──────────────────────────────────────
+  p.draw = function() {
+    p.clear();
 
-  /* =====================================================
-     RENDER — Build Figure Grid
-  ===================================================== */
-  function buildFigureGrid() {
-    const grid = document.getElementById('figureGrid');
-    grid.innerHTML = '';
-    FIGURES.forEach(fig => {
-      const card = document.createElement('div');
-      card.className = 'figure-card' + (fig.isSecret ? ' secret-card' : '');
-      card.id = `figCard_${fig.id}`;
-      card.innerHTML = `
-        <div class="new-badge">NEW!</div>
-        <span class="figure-emoji">${fig.emoji}</span>
-        <div class="figure-name">${fig.name}</div>
-        <div class="figure-owned-badge" id="figOwned_${fig.id}">Owned: 0</div>
-      `;
-      grid.appendChild(card);
-    });
+    if (STATE === "idle")    drawIdle();
+    else if (STATE === "shaking") drawShaking();
+    else if (STATE === "reveal")  drawReveal();
+    else if (STATE === "secret")  drawSecret();
+    else if (STATE === "empty")   drawEmpty();
+  };
+
+  // ── IDLE STATE ────────────────────────────────────
+  function drawIdle() {
+    const cx = p.width / 2;
+    const cy = p.height / 2 - 20;
+
+    // Floating pulse glow under box
+    const pulse = p.sin(p.frameCount * 0.05) * 0.3 + 0.7;
+    p.noStroke();
+    p.fill(255, 107, 157, 40 * pulse);
+    p.ellipse(cx, cy + 58, 110, 22);
+
+    drawBox(cx, cy, 0);
+
+    // Instruction text
+    p.noStroke();
+    p.fill(100, 80, 140, 180);
+    p.textSize(13);
+    p.textStyle(p.NORMAL);
+    p.text("← Click  Open 1 Box  or  Open Case  to pull", cx, p.height - 28);
+
+    // Pool size pill
+    drawPill(`${BOXES_LEFT} boxes remaining in this batch`, cx, p.height - 8, "#8a7aaa", "#1c1630cc");
   }
 
-  function updateFigureGrid() {
-    FIGURES.forEach(fig => {
-      const card = document.getElementById(`figCard_${fig.id}`);
-      const badge = document.getElementById(`figOwned_${fig.id}`);
-      const count = state.owned[fig.id];
+  // ── SHAKING STATE ─────────────────────────────────
+  function drawShaking() {
+    const cx = p.width / 2;
+    const cy = p.height / 2 - 20;
+    const shakeX = p.random(-7, 7);
+    const shakeY = p.random(-3, 3);
 
-      if (count > 0) {
-        card.classList.add('unlocked');
-        badge.textContent = `Owned: ${count}`;
+    if (shakeFrame > 0) shakeFrame--;
+
+    // Glow intensifies during shake
+    p.noStroke();
+    p.fill(255, 107, 157, 60);
+    p.ellipse(cx + shakeX, cy + 58, 120, 26);
+
+    drawBox(cx + shakeX, cy + shakeY, p.sin(p.frameCount * 0.4) * 6);
+
+    p.fill(100, 80, 140, 200);
+    p.textSize(14);
+    p.text("Opening...", cx, p.height - 28);
+  }
+
+  // ── REVEAL STATE ──────────────────────────────────
+  function drawReveal() {
+    revealAlpha = p.min(revealAlpha + 8, 255);
+
+    const cx = p.width / 2;
+    const cy = p.height / 2;
+
+    // Glow behind card
+    p.noStroke();
+    p.fill(
+      p.red(p.color(CARD_COLOR)),
+      p.green(p.color(CARD_COLOR)),
+      p.blue(p.color(CARD_COLOR)),
+      60 * (revealAlpha / 255)
+    );
+    p.ellipse(cx, cy, 260, 160);
+
+    // Card body
+    p.push();
+    const scale = p.map(revealAlpha, 0, 255, 0.6, 1.0);
+    p.translate(cx, cy);
+    p.scale(scale);
+    p.translate(-cx, -cy);
+
+    drawRevealCard(cx, cy, revealAlpha);
+    p.pop();
+
+    // Sparkles (regular reveal)
+    updateSparkles();
+  }
+
+  // ── SECRET STATE ──────────────────────────────────
+  function drawSecret() {
+    goldPulse += 0.05;
+    revealAlpha = p.min(revealAlpha + 6, 255);
+
+    const cx = p.width / 2;
+    const cy = p.height / 2;
+
+    // Pulsing golden background glow
+    const glow = p.sin(goldPulse) * 0.4 + 0.6;
+    p.noStroke();
+    p.fill(255, 229, 102, 80 * glow);
+    p.ellipse(cx, cy, 300 + p.sin(goldPulse * 1.3) * 20, 200);
+
+    p.fill(255, 215, 0, 30 * glow);
+    p.ellipse(cx, cy, 380, 260);
+
+    // Gold card with shimmer
+    p.push();
+    const scale = p.map(revealAlpha, 0, 255, 0.5, 1.0);
+    p.translate(cx, cy);
+    p.scale(scale);
+    p.translate(-cx, -cy);
+    drawSecretCard(cx, cy, revealAlpha);
+    p.pop();
+
+    // Sparkles
+    // Add new sparkles continuously
+    if (p.frameCount % 3 === 0 && sparkles.length < 60) {
+      sparkles.push({
+        x:    p.random(p.width),
+        y:    p.random(p.height),
+        vx:   p.random(-1.5, 1.5),
+        vy:   p.random(-3, -0.3),
+        size: p.random(4, 12),
+        life: 1.0,
+        col:  p.random(["#ffe566","#fff8a0","#ffd700","#ff6b9d","#ffffff"]),
+      });
+    }
+    updateSparkles();
+  }
+
+  // ── EMPTY STATE ────────────────────────────────────
+  function drawEmpty() {
+    const cx = p.width / 2;
+    const cy = p.height / 2;
+    p.noStroke();
+    p.fill(80, 60, 120, 180);
+    p.textSize(22);
+    p.textStyle(p.BOLD);
+    p.text("This batch is sold out 📦", cx, cy - 18);
+    p.textSize(13);
+    p.textStyle(p.NORMAL);
+    p.fill(130, 110, 170, 160);
+    p.text("Ask the admin to restock the factory batch.", cx, cy + 18);
+  }
+
+  // ── BOX DRAWING HELPER ────────────────────────────
+  function drawBox(cx, cy, angle) {
+    p.push();
+    p.translate(cx, cy);
+    p.rotate(p.radians(angle));
+
+    // Box body
+    p.stroke(224, 85, 154);
+    p.strokeWeight(3);
+    p.fill("#ff8fc8");
+    p.rectMode(p.CENTER);
+    p.rect(0, 0, 96, 96, 10);
+
+    // Lid
+    p.fill("#ff6bb3");
+    p.rect(0, -34, 108, 28, 7);
+
+    // Ribbon vertical
+    p.noStroke();
+    p.fill(255, 229, 102, 210);
+    p.rect(0, 0, 18, 96, 5);
+
+    // Ribbon horizontal
+    p.rect(0, -34, 108, 16, 5);
+
+    // Bow left
+    p.fill("#ffd700");
+    p.push();
+    p.rotate(p.radians(-20));
+    p.ellipse(-16, -42, 32, 16);
+    p.pop();
+
+    // Bow right
+    p.push();
+    p.rotate(p.radians(20));
+    p.ellipse(16, -42, 32, 16);
+    p.pop();
+
+    // Bow center
+    p.stroke(224, 168, 0);
+    p.strokeWeight(1.5);
+    p.fill("#f6c94e");
+    p.circle(0, -42, 18);
+
+    // Stars on box
+    p.noStroke();
+    p.fill(255, 255, 255, 80);
+    p.textSize(14);
+    p.text("✦", -28, 18);
+    p.textSize(11);
+    p.text("◆", 28, -8);
+
+    p.pop();
+  }
+
+  // ── REVEAL CARD HELPER ────────────────────────────
+  function drawRevealCard(cx, cy, alpha) {
+    // Card background
+    const cc = p.color(CARD_COLOR);
+    p.fill(p.red(cc), p.green(cc), p.blue(cc), alpha * 0.85);
+    p.stroke(255, 255, 255, alpha * 0.6);
+    p.strokeWeight(2);
+    p.rectMode(p.CENTER);
+    p.rect(cx, cy, 230, 110, 18);
+
+    // Emoji
+    p.noStroke();
+    p.fill(30, 20, 50, alpha);
+    p.textSize(36);
+    p.text(EMOJI, cx, cy - 18);
+
+    // Figure name
+    p.textSize(17);
+    p.textStyle(p.BOLD);
+    p.fill(30, 20, 50, alpha);
+    p.text(FIGURE_NAME, cx, cy + 22);
+
+    // "YOU GOT" label
+    p.textSize(10);
+    p.textStyle(p.NORMAL);
+    p.fill(100, 80, 140, alpha * 0.8);
+    p.text("Y O U  G O T", cx, cy - 50);
+  }
+
+  // ── SECRET CARD HELPER ────────────────────────────
+  function drawSecretCard(cx, cy, alpha) {
+    // Gold gradient card (approximated with layered rects)
+    p.noStroke();
+    for (let i = 10; i >= 0; i--) {
+      const t = i / 10;
+      const r = p.lerp(255, 255, t);
+      const g = p.lerp(200, 229, t);
+      const b = p.lerp(50,  102, t);
+      p.fill(r, g, b, alpha * 0.09);
+      p.rectMode(p.CENTER);
+      p.rect(cx, cy, 240 + i * 4, 120 + i * 3, 18 + i);
+    }
+
+    // Card body
+    p.fill(255, 229, 102, alpha * 0.92);
+    p.stroke(255, 200, 0, alpha);
+    p.strokeWeight(2.5);
+    p.rect(cx, cy, 240, 120, 18);
+
+    // Emoji
+    p.noStroke();
+    p.fill(30, 20, 0, alpha);
+    p.textSize(38);
+    p.text(EMOJI, cx, cy - 20);
+
+    // Name
+    p.textSize(18);
+    p.textStyle(p.BOLD);
+    p.fill(100, 70, 0, alpha);
+    p.text(FIGURE_NAME, cx, cy + 24);
+
+    // SECRET FOUND banner
+    p.textSize(10);
+    p.textStyle(p.NORMAL);
+    p.fill(180, 120, 0, alpha);
+    p.text("✦  U L T R A  S E C R E T  ✦", cx, cy - 54);
+  }
+
+  // ── SPARKLE SYSTEM ────────────────────────────────
+  function updateSparkles() {
+    for (let i = sparkles.length - 1; i >= 0; i--) {
+      const s = sparkles[i];
+      s.x   += s.vx;
+      s.y   += s.vy;
+      s.vy  += 0.05;  // gravity
+      s.life -= 0.018;
+
+      if (s.life <= 0) {
+        sparkles.splice(i, 1);
+        continue;
       }
-      if (state.newFlags[fig.id]) {
-        card.classList.add('just-unlocked');
-        setTimeout(() => { card.classList.remove('just-unlocked'); state.newFlags[fig.id] = false; }, 2500);
-      }
-    });
-  }
 
-  /* =====================================================
-     RENDER — Analytics
-  ===================================================== */
-  function updateAnalytics() {
-    document.getElementById('kpiBoxes').textContent   = state.totalOpened.toLocaleString();
-    document.getElementById('kpiSpent').textContent   = '$' + (state.totalOpened * BOX_PRICE).toLocaleString();
-    document.getElementById('kpiSecrets').textContent = state.secretsFound;
-
-    const uniqueOwned = state.owned.filter(c => c > 0).length;
-    document.getElementById('kpiUniqueOwned').innerHTML =
-      `${uniqueOwned}<span style="font-size:14px;color:var(--text-muted)">/7</span>`;
-
-    document.getElementById('collectionSub').textContent =
-      `${uniqueOwned} of 7 unique figures owned`;
-
-    // Pull rate bars
-    if (state.totalOpened > 0) {
-      const secPct = (state.secretsFound / state.totalOpened) * 100;
-      const regPct = 100 - secPct;
-
-      document.getElementById('ratePctRegular').textContent = regPct.toFixed(1) + '%';
-      document.getElementById('rateBarRegular').style.width = regPct + '%';
-
-      document.getElementById('ratePctSecret').textContent  = secPct.toFixed(2) + '%';
-      document.getElementById('rateBarSecret').style.width  = Math.min(secPct * 10, 100) + '%'; // scaled for visibility
-
-      // Expected vs actual
-      const expectedSecret = (state.totalOpened / 72).toFixed(2);
-      document.getElementById('expectedText').innerHTML =
-        `Expected secrets after ${state.totalOpened} pulls: <strong style="color:var(--text-main)">${expectedSecret}</strong><br>
-         Actual: <strong style="color:var(--pop-pink)">${state.secretsFound}</strong><br>
-         <span style="font-size:11px;opacity:0.6">(law of large numbers at work)</span>`;
+      p.noStroke();
+      const sc = p.color(s.col);
+      p.fill(p.red(sc), p.green(sc), p.blue(sc), 255 * s.life);
+      p.circle(s.x, s.y, s.size * s.life);
     }
   }
 
-  /* =====================================================
-     OPENING LOGIC
-  ===================================================== */
-  let animating = false;
+  // ── PILL LABEL ────────────────────────────────────
+  function drawPill(txt, cx, y, textCol, bgCol) {
+    p.textSize(11);
+    const w = p.textWidth(txt) + 24;
 
-  async function openBoxes(count) {
-    if (animating) return;
-    animating = true;
-    setButtonsDisabled(true);
+    p.noStroke();
+    p.fill(bgCol || "#1c163099");
+    p.rect(cx - w/2, y - 11, w, 20, 10);
 
-    // Hide previous results
-    document.getElementById('revealCard').classList.remove('visible');
-    document.getElementById('multiStrip').classList.remove('visible');
-
-    const results = [];
-    for (let i = 0; i < count; i++) results.push(drawFigure());
-
-    // Update state
-    let hasSecret = false;
-    let secretFig = null;
-    results.forEach(fig => {
-      state.totalOpened++;
-      if (fig.isSecret) {
-        state.secretsFound++;
-        hasSecret = true;
-        secretFig = fig;
-      }
-      const wasZero = state.owned[fig.id] === 0;
-      state.owned[fig.id]++;
-      if (wasZero) state.newFlags[fig.id] = true;
-    });
-
-    // Box shake animation
-    const boxWrap = document.getElementById('boxWrap');
-    boxWrap.classList.add('shaking');
-    await delay(750);
-    boxWrap.classList.remove('shaking');
-    boxWrap.classList.add('popping');
-    await delay(520);
-    boxWrap.classList.remove('popping');
-
-    if (count === 1) {
-      showSingleReveal(results[0]);
-    } else {
-      showMultiReveal(results);
-    }
-
-    // Update last pull display
-    updateLastPull(results[results.length - 1]);
-
-    // Update collection & analytics
-    updateFigureGrid();
-    updateAnalytics();
-
-    // Secret overlay (only for single or if secret in multi)
-    if (hasSecret) {
-      await delay(600);
-      showSecretOverlay(secretFig);
-    }
-
-    animating = false;
-    setButtonsDisabled(false);
+    p.fill(textCol || "#a090c0");
+    p.textStyle(p.NORMAL);
+    p.text(txt, cx, y);
   }
 
-  function showSingleReveal(fig) {
-    const card = document.getElementById('revealCard');
-    const label = document.getElementById('revealLabel');
-    const badge = document.getElementById('revealBadge');
-    const emoji = document.getElementById('revealEmoji');
-    const name  = document.getElementById('revealName');
-    const sparkWrap = document.getElementById('sparklesWrap');
-
-    label.textContent = fig.isSecret ? '✦ ULTRA RARE ✦' : 'YOU GOT';
-    label.className   = 'reveal-label' + (fig.isSecret ? ' secret-label' : '');
-    badge.className   = 'reveal-badge' + (fig.isSecret ? ' secret' : ' regular');
-    badge.style.background = fig.isSecret ? '' : fig.color + 'cc';
-    emoji.textContent = fig.emoji;
-    name.textContent  = fig.name;
-
-    // Sparkles for secret
-    sparkWrap.innerHTML = '';
-    if (fig.isSecret) {
-      for (let i = 0; i < 14; i++) {
-        const s = document.createElement('div');
-        s.className = 'sparkle';
-        const tx  = (Math.random() - 0.5) * 160;
-        const ty  = (Math.random() - 0.5) * 80;
-        const tx2 = tx + (Math.random() - 0.5) * 40;
-        const ty2 = ty + 20 + Math.random() * 30;
-        s.style.cssText = `
-          left: ${Math.random() * 100}%;
-          top:  ${Math.random() * 100}%;
-          background: ${['#fff', '#ffe566', '#ffd700'][Math.floor(Math.random()*3)]};
-          --tx: ${tx}px; --ty: ${ty}px; --tx2: ${tx2}px; --ty2: ${ty2}px;
-          --dur: ${0.8 + Math.random() * 0.8}s;
-          --del: ${Math.random() * 0.5}s;
-        `;
-        sparkWrap.appendChild(s);
-      }
-    }
-
-    card.classList.add('visible');
-  }
-
-  function showMultiReveal(results) {
-    const strip = document.getElementById('multiStrip');
-    strip.innerHTML = '';
-    results.forEach(fig => {
-      const pill = document.createElement('div');
-      pill.className = 'mini-pill' + (fig.isSecret ? ' secret' : '');
-      pill.textContent = fig.emoji + ' ' + fig.name;
-      strip.appendChild(pill);
-    });
-    strip.classList.add('visible');
-  }
-
-  function updateLastPull(fig) {
-    const el = document.getElementById('lastPullDisplay');
-    el.innerHTML = `
-      <div class="dot" style="background:${fig.color}"></div>
-      <span><strong>${fig.name}</strong> ${fig.isSecret ? '<span style="color:var(--gold-deep);font-size:11px;">⭐ SECRET</span>' : ''}</span>
-    `;
-  }
-
-  /* =====================================================
-     SECRET OVERLAY
-  ===================================================== */
-  function showSecretOverlay(fig) {
-    document.getElementById('secretOverlayEmoji').textContent = fig.emoji;
-    document.getElementById('secretOverlayName').textContent  = fig.name;
-    document.getElementById('secretOverlay').classList.add('show');
-    launchConfetti();
-  }
-
-  function closeSecretOverlay() {
-    document.getElementById('secretOverlay').classList.remove('show');
-    clearConfetti();
-  }
-
-  let confettiPieces = [];
-
-  function launchConfetti() {
-    clearConfetti();
-    const colors = ['#ff6bb3','#ffe566','#b8f0e6','#d9c9f5','#3ec6e0','#ffd9b3','#ff8fc8'];
-    for (let i = 0; i < 80; i++) {
-      const el = document.createElement('div');
-      el.className = 'confetti-piece';
-      const col = colors[Math.floor(Math.random() * colors.length)];
-      const isCircle = Math.random() > 0.5;
-      el.style.cssText = `
-        left: ${Math.random() * 100}vw;
-        top: 0;
-        background: ${col};
-        border-radius: ${isCircle ? '50%' : '2px'};
-        width: ${6 + Math.random() * 8}px;
-        height: ${6 + Math.random() * 8}px;
-        --sx: ${(Math.random() - 0.5) * 60}px;
-        --ex: ${(Math.random() - 0.5) * 200}px;
-        --rot: ${360 + Math.random() * 720}deg;
-        --dur: ${2 + Math.random() * 2}s;
-        --del: ${Math.random() * 1}s;
-      `;
-      document.body.appendChild(el);
-      confettiPieces.push(el);
-    }
-  }
-
-  function clearConfetti() {
-    confettiPieces.forEach(el => el.remove());
-    confettiPieces = [];
-  }
-
-  /* =====================================================
-     RESET
-  ===================================================== */
-  function resetAll() {
-    state.totalOpened  = 0;
-    state.secretsFound = 0;
-    state.owned.fill(0);
-    state.newFlags.fill(false);
-
-    document.getElementById('revealCard').classList.remove('visible');
-    document.getElementById('multiStrip').classList.remove('visible');
-    document.getElementById('lastPullDisplay').innerHTML = '<span style="opacity:0.4">— nothing yet —</span>';
-    document.getElementById('expectedText').textContent  = 'Open some boxes to see expected vs actual secret pulls.';
-    document.getElementById('ratePctRegular').textContent = '—';
-    document.getElementById('ratePctSecret').textContent  = '—';
-    document.getElementById('rateBarRegular').style.width = '0%';
-    document.getElementById('rateBarSecret').style.width  = '0%';
-
-    buildFigureGrid();
-    updateAnalytics();
-  }
-
-  /* =====================================================
-     HELPERS
-  ===================================================== */
-  function delay(ms) { return new Promise(r => setTimeout(r, ms)); }
-
-  function setButtonsDisabled(v) {
-    document.getElementById('btnOpen1').disabled  = v;
-    document.getElementById('btnOpen12').disabled = v;
-  }
-
-  /* =====================================================
-     INIT
-  ===================================================== */
-  buildFigureGrid();
-  updateAnalytics();
+});
 </script>
 </body>
 </html>
