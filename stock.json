@@ -1,18 +1,17 @@
 {
   "stock": {
-    "Cherry Blossom": 10,
-    "Mint Dream": 9,
-    "Lavender Haze": 15,
-    "Peach Glow": 7,
-    "Sky Pop": 16,
-    "Coral Bloom": 14,
+    "Cherry Blossom": 9,
+    "Mint Dream": 14,
+    "Lavender Haze": 9,
+    "Peach Glow": 15,
+    "Sky Pop": 13,
+    "Coral Bloom": 11,
     "Golden Labubu \u2726": 1
   },
   "total_original": 72,
-  
   "total_remaining": 72,
   "boxes_opened": 0,
-  "secret_case_idx": 4,
+  "secret_case_idx": 1,
   "case_log": [
     {
       "case": 1,
@@ -20,7 +19,7 @@
     },
     {
       "case": 2,
-      "has_secret": false
+      "has_secret": true
     },
     {
       "case": 3,
@@ -32,7 +31,7 @@
     },
     {
       "case": 5,
-      "has_secret": true
+      "has_secret": false
     },
     {
       "case": 6,
@@ -40,5 +39,5 @@
     }
   ],
   "history": [],
-  "batch_id": 1780543617
+  "batch_id": 1780582250
 }
