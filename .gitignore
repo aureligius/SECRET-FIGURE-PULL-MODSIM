@@ -1,0 +1,6 @@
+# Python cache files
+__pycache__/
+*.py[cod]
+
+# Local Streamlit helper / duplicate fallback file
+streamlit_app.py
