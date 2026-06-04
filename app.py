@@ -4,22 +4,16 @@ app.py — Labubu Blind Box Simulator
 """
 
 import os
-import sys
-import subprocess
 import base64
 import numpy as np
 import pandas as pd
 
-
-def _ensure_package_installed(package_name: str):
-    subprocess.check_call([sys.executable, "-m", "pip", "install", package_name])
-
-
 try:
     import plotly.graph_objects as go
-except ModuleNotFoundError:
-    _ensure_package_installed("plotly>=5.18.0")
-    import plotly.graph_objects as go
+except ModuleNotFoundError as exc:
+    raise ModuleNotFoundError(
+        "Missing required package 'plotly'. Ensure `requirements.txt` is in the repo root and Streamlit Cloud is deploying `app.py` from the repository root."
+    ) from exc
 
 import streamlit as st
 import streamlit.components.v1 as components
