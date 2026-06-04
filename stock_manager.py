@@ -30,8 +30,8 @@ from typing import Optional
 # ─────────────────────────────────────────────
 STOCK_FILE   = "stock.json"
 LOCK_FILE    = "stock.lock"
-BOX_PRICE    = 15.0
-CASE_PRICE   = 180.0  #  FIX: 12 boxes × $15.00 = $180.00 per case
+BOX_PRICE    = 10.0
+CASE_PRICE   = 120.0  #  FIX: 12 boxes × $10.00 = $120.00 per case
 # 1 secret per factory batch of 72 boxes (6 cases × 12 boxes)
 P_SECRET     = 1 / 72  #  FIX: Adds the baseline theoretical probability
 P_REGULAR_EACH = 71 / 432
@@ -87,14 +87,6 @@ class FileLock:
             os.remove(self.lock_path)
         except FileNotFoundError:
             pass
-
-
-# 3. INTERNALS AND SIMULATIONS THIRD
-def _generate_fresh_batch(seed: Optional[int] = None) -> dict:
-    # This will now safely find FIGURE_NAMES defined above!
-    rng = np.random.default_rng(seed)
-    stock = {name: 0 for name in FIGURE_NAMES}
-    # ... rest of your code
 
 # ─────────────────────────────────────────────
 # BATCH GENERATOR

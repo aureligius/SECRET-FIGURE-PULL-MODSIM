@@ -14,12 +14,13 @@ Key contracts with app.py:
 
 import numpy as np
 from typing import Optional
-
 from stock_manager import (
-    BOX_PRICE, CASE_PRICE, FIGURE_NAMES,
+    BOX_PRICE, FIGURE_NAMES,
     P_SECRET, P_REGULAR_EACH,
     load_stock, _generate_fresh_batch,
 )
+
+CASE_PRICE = BOX_PRICE * 12
 
 # ─────────────────────────────────────────────
 # SIMULATION RESULT WRAPPER
@@ -84,9 +85,10 @@ class SimulationResult(dict):
         }
 
     def __getattr__(self, name):
-        if name in self:
+        try:
             return self[name]
-        raise AttributeError(f"'SimulationResult' has no attribute '{name}'")
+        except KeyError:
+            raise AttributeError(f"'SimulationResult' has no attribute '{name}'")
 
 
 # ─────────────────────────────────────────────

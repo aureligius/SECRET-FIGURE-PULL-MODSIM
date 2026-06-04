@@ -1,11 +1,11 @@
 {
   "stock": {
     "Cherry Blossom": 10,
-    "Mint Dream": 17,
-    "Lavender Haze": 10,
-    "Peach Glow": 10,
-    "Sky Pop": 15,
-    "Coral Bloom": 9,
+    "Mint Dream": 9,
+    "Lavender Haze": 15,
+    "Peach Glow": 7,
+    "Sky Pop": 16,
+    "Coral Bloom": 14,
     "Golden Labubu \u2726": 1
   },
   "total_original": 72,
@@ -39,5 +39,5 @@
     }
   ],
   "history": [],
-  "batch_id": 1780406915
+  "batch_id": 1780543617
 }

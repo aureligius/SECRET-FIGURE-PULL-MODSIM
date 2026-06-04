@@ -1,31 +1,29 @@
 """
-app.py
-======
-Labubu Blind Box — Full Stochastic Simulation Dashboard
-Streamlit + Plotly + NumPy vectorised engine (N = 100,000)
+app.py — Labubu Blind Box Simulator
+2 Machines: Budget Predictor + Real-Time Box Opener
 """
 
-import time
+import os
+import base64
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
-import plotly.express as px
-from plotly.subplots import make_subplots
 import streamlit as st
+import streamlit.components.v1 as components
 
+from stock_manager import (
+    restock, open_one_box, get_pool_metadata,
+    get_session_history, FIGURE_NAMES, FIGURE_EMOJIS,
+    BOX_PRICE, P_SECRET, P_REGULAR_EACH, _theoretical_rates,
+)
 from simulation_engine import (
-    run_all_strategies,
-    run_gbm_display,
-    simulate_shelf_scenarios,
-    shelf_conditional,
-    generate_sealed_case,
-    BOX_PRICE, CASE_PRICE, FIGURE_NAMES,
-    P_SECRET, P_REGULAR_EACH,
+    simulate_budget_confidence,
+    sensitivity_depletion_level,
+    sensitivity_confidence_curve,
+    compute_standard_error,
 )
 
-# ──────────────────────────────────────────────────────────
-# PAGE CONFIG
-# ──────────────────────────────────────────────────────────
+# ── Page config ───────────────────────────────────────────
 st.set_page_config(
     page_title="Labubu Simulator",
     page_icon="🌟",
@@ -33,693 +31,940 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# ──────────────────────────────────────────────────────────
-# CUSTOM CSS — dark editorial theme
-# ──────────────────────────────────────────────────────────
+# ── CSS ───────────────────────────────────────────────────
 st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Playfair+Display:wght@700;900&family=DM+Sans:wght@300;400;500;600&display=swap');
 
-html, body, [class*="css"] {
-    font-family: 'DM Sans', sans-serif;
-}
+html, body, [class*="css"] { font-family: 'DM Sans', sans-serif; }
+.stApp { background: #0d0b14; color: #e8e0f0; }
 
-/* Main background */
-.stApp {
-    background: #0d0b14;
-    color: #e8e0f0;
-}
-
-/* Sidebar */
 section[data-testid="stSidebar"] {
     background: #130f20;
     border-right: 1px solid #2a2040;
 }
 section[data-testid="stSidebar"] * { color: #c8b8e8 !important; }
-section[data-testid="stSidebar"] .stSlider > div { color: #c8b8e8; }
 
-/* Metric cards */
 [data-testid="metric-container"] {
     background: #1c1630;
     border: 1px solid #2e2550;
     border-radius: 14px;
     padding: 16px !important;
 }
-[data-testid="metric-container"] label { color: #8a7aaa !important; font-size: 12px !important; letter-spacing: 0.08em; }
-[data-testid="metric-container"] [data-testid="stMetricValue"] { color: #f0e8ff !important; font-family: 'Playfair Display', serif !important; font-size: 28px !important; }
-[data-testid="metric-container"] [data-testid="stMetricDelta"] { font-size: 12px !important; }
-
-/* Expander */
-.streamlit-expanderHeader {
-    background: #1c1630 !important;
-    border-radius: 10px !important;
-    color: #c8b8e8 !important;
-    font-family: 'DM Sans', sans-serif;
+[data-testid="metric-container"] label {
+    color: #8a7aaa !important;
+    font-size: 11px !important;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+}
+[data-testid="metric-container"] [data-testid="stMetricValue"] {
+    color: #f0e8ff !important;
+    font-family: 'Playfair Display', serif !important;
+    font-size: 24px !important;
 }
 
-/* Tabs */
-.stTabs [data-baseweb="tab-list"] { background: #130f20; border-radius: 12px; padding: 4px; gap: 4px; }
-.stTabs [data-baseweb="tab"] { background: transparent; color: #7060a0; border-radius: 8px; font-weight: 500; }
-.stTabs [aria-selected="true"] { background: #2e2550 !important; color: #e8d8ff !important; }
-
-/* Buttons */
 .stButton > button {
     background: linear-gradient(135deg, #8b5cf6, #6d28d9);
-    color: white;
-    border: none;
-    border-radius: 100px;
+    color: white; border: none; border-radius: 100px;
     font-family: 'DM Sans', sans-serif;
-    font-weight: 600;
-    letter-spacing: 0.03em;
-    padding: 0.5rem 1.5rem;
-    transition: all 0.2s;
+    font-weight: 600; padding: 0.55rem 1.8rem;
+    transition: all 0.2s; letter-spacing: 0.03em;
 }
 .stButton > button:hover { opacity: 0.88; transform: translateY(-1px); }
+.stButton > button:disabled { opacity: 0.35; transform: none; }
 
-/* Dataframe */
-.stDataFrame { background: #1c1630 !important; }
-
-/* Section headers */
-h1, h2, h3 { font-family: 'Playfair Display', serif !important; color: #f0e8ff !important; }
-h4, h5, h6 { font-family: 'DM Sans', sans-serif !important; color: #c8b8e8 !important; }
+h1, h2, h3 {
+    font-family: 'Playfair Display', serif !important;
+    color: #f0e8ff !important;
+}
 p, li { color: #a090c0 !important; }
-
-/* Info / warning boxes */
+hr { border-color: #2a2040; }
 .stAlert { border-radius: 12px; border: none; }
 
-/* Divider */
-hr { border-color: #2a2040; }
-
-/* Number input, selectbox */
-.stNumberInput input, .stSelectbox select {
-    background: #1c1630 !important;
-    border: 1px solid #2e2550 !important;
-    color: #e8e0f0 !important;
-    border-radius: 8px !important;
+/* Figure card grid */
+.figure-card-grid {
+    display: flex;
+    gap: 14px;
+    overflow-x: auto;
+    padding: 8px 4px 16px 4px;
+    scrollbar-width: thin;
+    scrollbar-color: #2e2550 transparent;
 }
+.figure-card {
+    flex: 0 0 130px;
+    background: #1c1630;
+    border: 2px solid #2e2550;
+    border-radius: 16px;
+    padding: 14px 10px 12px;
+    text-align: center;
+    cursor: pointer;
+    transition: all 0.2s;
+    user-select: none;
+}
+.figure-card:hover {
+    border-color: #8b5cf6;
+    transform: translateY(-3px);
+    box-shadow: 0 8px 24px rgba(139,92,246,0.25);
+}
+.figure-card.selected {
+    border-color: #a78bfa;
+    background: #2e2550;
+    box-shadow: 0 0 0 3px rgba(167,139,250,0.3),
+                0 8px 24px rgba(139,92,246,0.3);
+    transform: translateY(-4px);
+}
+.figure-card.selected-secret {
+    border-color: #f6c94e;
+    background: #2e1a10;
+    box-shadow: 0 0 0 3px rgba(246,201,78,0.4),
+                0 8px 28px rgba(246,201,78,0.3);
+    transform: translateY(-4px);
+}
+.figure-card img {
+    width: 80px;
+    height: 80px;
+    object-fit: contain;
+    border-radius: 10px;
+    margin-bottom: 8px;
+    background: #130f20;
+    padding: 4px;
+}
+.figure-card .fig-name {
+    font-size: 11px;
+    font-weight: 600;
+    color: #c8b8e8;
+    line-height: 1.3;
+}
+.figure-card.selected .fig-name { color: #e8d8ff; }
+.figure-card .fig-prob {
+    font-size: 10px;
+    color: #7060a0;
+    margin-top: 3px;
+}
+.figure-card.selected-secret .fig-name { color: #ffe566; }
+.figure-card.selected-secret .fig-prob { color: #f6c94e; }
+
+/* Budget input box */
+.budget-display {
+    background: #1c1630;
+    border: 1px solid #2e2550;
+    border-radius: 14px;
+    padding: 20px 24px;
+    margin: 12px 0;
+}
+
+/* Pull history pill */
+.pull-pill {
+    display: inline-block;
+    background: #1c1630;
+    border: 1px solid #2e2550;
+    border-radius: 8px;
+    padding: 6px 10px;
+    margin: 3px;
+    font-size: 12px;
+    color: #c8b8e8;
+    text-align: center;
+}
+.pull-pill.secret {
+    background: #2e1a10;
+    border-color: #f6c94e;
+    color: #ffe566;
+}
+
+/* Confidence metric card row */
+.conf-grid {
+    display: flex;
+    gap: 10px;
+    margin: 16px 0;
+    flex-wrap: wrap;
+}
+.conf-card {
+    flex: 1;
+    min-width: 100px;
+    background: #1c1630;
+    border: 1px solid #2e2550;
+    border-radius: 12px;
+    padding: 14px 10px;
+    text-align: center;
+}
+.conf-card .conf-pct {
+    font-size: 11px;
+    color: #8a7aaa;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    margin-bottom: 4px;
+}
+.conf-card .conf-val {
+    font-family: 'Playfair Display', serif;
+    font-size: 20px;
+    font-weight: 700;
+    color: #f0e8ff;
+}
+.conf-card.highlight {
+    border-color: #a78bfa;
+    background: #2e2550;
+}
+.conf-card.highlight .conf-val { color: #e8d8ff; }
 </style>
 """, unsafe_allow_html=True)
 
+# ── Plotly theme ──────────────────────────────────────────
+PLOT_BG  = "#0d0b14"
+FONT_COL = "#c8b8e8"
+GRID_COL = "#2a2040"
 
-# ──────────────────────────────────────────────────────────
-# PLOTLY THEME HELPERS
-# ──────────────────────────────────────────────────────────
-PLOT_BG    = "#0d0b14"
-PAPER_BG   = "#0d0b14"
-GRID_COLOR = "#2a2040"
-FONT_COLOR = "#c8b8e8"
-PALETTE    = {
-    "A": "#ff6b9d",   # Gambler     — hot pink
-    "B": "#3ec6e0",   # Whale       — cyan
-    "D": "#a78bfa",   # Calculated  — violet
-    "C": "#f6c94e",   # Patient     — gold
+def base_layout(title="", height=380):
+    return dict(
+        title=dict(text=title,
+                   font=dict(family="Playfair Display", size=16, color=FONT_COL)),
+        paper_bgcolor=PLOT_BG, plot_bgcolor=PLOT_BG,
+        font=dict(family="DM Sans", color=FONT_COL),
+        height=height,
+        xaxis=dict(gridcolor=GRID_COL, zerolinecolor=GRID_COL),
+        yaxis=dict(gridcolor=GRID_COL, zerolinecolor=GRID_COL),
+        legend=dict(bgcolor="rgba(0,0,0,0)"),
+        margin=dict(l=44, r=20, t=50, b=44),
+    )
+
+# ── Image loader ──────────────────────────────────────────
+IMAGE_DIR = "images"
+
+# Map figure name → filename inside images/ folder
+# EDIT THESE FILENAMES to match whatever you name your image files
+IMAGE_FILES = {
+    "Cherry Blossom":  "cherry_blossom.png",
+    "Mint Dream":      "mint_dream.png",
+    "Lavender Haze":   "lavender_haze.png",
+    "Peach Glow":      "peach_glow.png",
+    "Sky Pop":         "sky_pop.png",
+    "Coral Bloom":     "coral_bloom.png",
+    "Golden Labubu ✦": "golden_labubu.png",
 }
 
-def base_layout(title="", height=420):
-    return dict(
-        title=dict(text=title, font=dict(family="Playfair Display", size=18, color=FONT_COLOR)),
-        paper_bgcolor=PAPER_BG,
-        plot_bgcolor=PLOT_BG,
-        font=dict(family="DM Sans", color=FONT_COLOR),
-        height=height,
-        xaxis=dict(gridcolor=GRID_COLOR, zerolinecolor=GRID_COLOR),
-        yaxis=dict(gridcolor=GRID_COLOR, zerolinecolor=GRID_COLOR),
-        legend=dict(bgcolor="rgba(0,0,0,0)", font=dict(color=FONT_COLOR)),
-        margin=dict(l=40, r=20, t=55, b=40),
+def get_image_b64(figure_name: str) -> str:
+    """
+    Load a figure image from the images/ folder and return as base64 data URI.
+    If the file doesn't exist, returns a coloured placeholder SVG.
+    """
+    path = os.path.join(IMAGE_DIR, IMAGE_FILES.get(figure_name, ""))
+    if os.path.exists(path):
+        with open(path, "rb") as f:
+            b64 = base64.b64encode(f.read()).decode()
+        ext = path.rsplit(".", 1)[-1].lower()
+        mime = "image/png" if ext == "png" else "image/jpeg"
+        return f"data:{mime};base64,{b64}"
+
+    # Placeholder — a soft coloured box with the emoji
+    PLACEHOLDER_COLORS = {
+        "Cherry Blossom":  "#f7c5c5",
+        "Mint Dream":      "#b8f0e6",
+        "Lavender Haze":   "#d9c9f5",
+        "Peach Glow":      "#ffd9b3",
+        "Sky Pop":         "#c7eeff",
+        "Coral Bloom":     "#ffb3c6",
+        "Golden Labubu ✦": "#ffe566",
+    }
+    color  = PLACEHOLDER_COLORS.get(figure_name, "#2e2550")
+    emoji  = FIGURE_EMOJIS.get(figure_name, "🎁")
+    svg = (
+        f'<svg xmlns="http://www.w3.org/2000/svg" width="80" height="80">'
+        f'<rect width="80" height="80" rx="10" fill="{color}"/>'
+        f'<text x="40" y="52" text-anchor="middle" font-size="32">{emoji}</text>'
+        f'</svg>'
     )
+    b64 = base64.b64encode(svg.encode()).decode()
+    return f"data:image/svg+xml;base64,{b64}"
+
+# ── Session state ─────────────────────────────────────────
+for k, v in {
+    "selected_figure":  "Golden Labubu ✦",
+    "machine1_result":  None,
+    "session_pulls":    [],
+    "last_result":      None,
+    "canvas_state":     "idle",
+    "user_budget":      0.0,
+    "boxes_used":       0,
+    "sens_dep":         None,
+    "sens_conf":        None,
+}.items():
+    if k not in st.session_state:
+        st.session_state[k] = v
+
+# ── Animation renderer ────────────────────────────────────
+def render_animation(state="idle", figure="", emoji="🎁",
+                     is_secret=False, remaining=72):
+    try:
+        with open("animation.html", "r", encoding="utf-8") as f:
+            html_raw = f.read()
+    except FileNotFoundError:
+        st.error("animation.html not found.")
+        return
+
+    inject = f"""<script>
+    window._LABUBU_PARAMS = {{
+      state:     "{state}",
+      figure:    "{figure}",
+      emoji:     "{emoji}",
+      is_secret: {"true" if is_secret else "false"},
+      remaining: {remaining}
+    }};
+    </script>"""
+
+    patched = html_raw.replace(
+        "function getParam(key, fallback) {",
+        """function getParam(key, fallback) {
+          if (window._LABUBU_PARAMS && window._LABUBU_PARAMS[key] !== undefined)
+            return String(window._LABUBU_PARAMS[key]);"""
+    )
+    components.html(inject + patched, height=320, scrolling=False)
+
+# ── Figure card selector (HTML component) ─────────────────
+def render_figure_selector(selected: str) -> None:
+    """
+    Renders a horizontal scrollable card strip.
+    Each card shows the figure image + name + probability.
+    Clicking a card calls st.session_state update via a hidden form trick.
+    We use st.radio hidden behind the cards for actual state management.
+    """
+    cards_html = ""
+    for fig in FIGURE_NAMES:
+        img_src   = get_image_b64(fig)
+        is_secret = fig == "Golden Labubu ✦"
+        is_sel    = fig == selected
+        sel_class = ("selected-secret" if (is_sel and is_secret)
+                     else "selected" if is_sel else "")
+        prob_str  = "1/72 ≈ 1.39%" if is_secret else "71/432 ≈ 16.44%"
+        # Each card is wrapped in a form that submits with a hidden input
+        # We use a data attribute to pass the figure name
+        cards_html += f"""
+        <div class="figure-card {sel_class}" onclick="selectFigure('{fig}')">
+          <!-- INSERT IMAGE: images/{IMAGE_FILES.get(fig, '')} -->
+          <img src="{img_src}" alt="{fig}" />
+          <div class="fig-name">{fig}</div>
+          <div class="fig-prob">{prob_str}</div>
+        </div>
+        """
+
+    # The JS sets a hidden input and submits a form back to Streamlit
+    # We use the streamlit-js-eval trick via postMessage
+    html = f"""
+    <div class="figure-card-grid" id="figGrid">
+      {cards_html}
+    </div>
+    <input type="hidden" id="selectedFig" value="{selected}" />
+    <script>
+    function selectFigure(name) {{
+      document.getElementById('selectedFig').value = name;
+      // Send to Streamlit via query string navigation
+      const url = new URL(window.location.href);
+      // We piggyback on Streamlit's component value mechanism
+      window.parent.postMessage({{
+        type: 'streamlit:setComponentValue',
+        value: name
+      }}, '*');
+    }}
+    </script>
+    """
+    # Render as a component that returns selected figure
+    val = components.html(html, height=180, scrolling=False)
 
 
-# ──────────────────────────────────────────────────────────
-# SIDEBAR — CONTROL PANEL
-# ──────────────────────────────────────────────────────────
+# ── Sidebar ───────────────────────────────────────────────
 with st.sidebar:
-    st.markdown("## ⚙️ Simulation Controls")
+    st.markdown("""
+    <div style='text-align:center;padding:12px 0 8px;'>
+      <div style='font-size:22px;'>🌟</div>
+      <div style='font-family:Playfair Display,serif;font-size:18px;
+                  font-weight:700;color:#f0e8ff;'>Labubu Simulator</div>
+      <div style='font-size:10px;color:#6050a0;letter-spacing:.12em;
+                  text-transform:uppercase;margin-top:2px;'>
+        Finite Pool · Monte Carlo
+      </div>
+    </div>
+    """, unsafe_allow_html=True)
+
     st.markdown("---")
 
-    N = st.select_slider(
-        "Monte Carlo Trials (N)",
+    page = st.radio("", [
+        "🎯  Machine 1 — Budget Predictor",
+        "📦  Machine 2 — Open Boxes",
+    ], label_visibility="collapsed")
+
+    st.markdown("---")
+
+    # Monte Carlo N slider — lives in sidebar as lecturer wants
+    st.markdown("#### 🔢 Monte Carlo Trials")
+    N_mc = st.select_slider(
+        "N",
         options=[1_000, 10_000, 50_000, 100_000],
         value=100_000,
-        help="More trials = tighter confidence intervals. 100k runs in ~50ms."
+        label_visibility="collapsed",
+        help="More trials = tighter confidence. 100k ≈ <1s on modern hardware."
     )
-
-    st.markdown("### 🎲 Strategy Parameters")
-
-    batch_size = st.slider(
-        "Strategy D — Batch Size (b)",
-        min_value=1, max_value=36, value=8, step=1,
-        help="Number of boxes bought per attempt in Strategy D"
-    )
-
-    st.markdown("### 📈 GBM Market Parameters")
-
-    gbm_S0 = st.number_input(
-        "Initial Reseller Price ($)", min_value=20.0, max_value=500.0,
-        value=80.0, step=5.0
-    )
-    gbm_mu = st.slider(
-        "Annual Drift μ", min_value=-1.0, max_value=2.0, value=0.4, step=0.05,
-        help="Positive = price growing (hype rising), negative = hype dying"
-    )
-    gbm_sigma = st.slider(
-        "Annual Volatility σ", min_value=0.05, max_value=2.0, value=0.6, step=0.05,
-        help="How noisy/unpredictable daily price swings are"
-    )
-    gbm_T = st.slider(
-        "Observation Window (days)", min_value=7, max_value=90, value=30, step=1
-    )
-    threshold = st.number_input(
-        "Strategy C — Buy Threshold ($)", min_value=5.0, max_value=float(gbm_S0),
-        value=min(60.0, gbm_S0 * 0.75), step=5.0,
-        help="Patient Buyer pulls the trigger when price ≤ this value"
-    )
-    resale_discount = st.slider(
-        "Strategy B — Resale Discount",
-        min_value=0.1, max_value=0.9, value=0.4, step=0.05,
-        help="Whale sells duplicates at this fraction of market price"
-    )
+    st.caption(f"SE ≈ σ/√{N_mc:,} per Dr. Syukron Week 10")
 
     st.markdown("---")
-    seed_on = st.checkbox("Fix random seed (reproducible)", value=False)
-    seed_val = st.number_input("Seed", value=42, step=1) if seed_on else None
 
-    run_btn = st.button("🚀 Run Simulation", use_container_width=True)
+    # Batch status
+    st.markdown("#### 🏭 Factory Batch")
+    meta = get_pool_metadata()
+    pct  = meta["total_remaining"] / meta["total_original"]
+    st.metric("Boxes Remaining",
+              f"{meta['total_remaining']} / {meta['total_original']}")
+    st.progress(pct, text=f"{pct*100:.0f}% left in batch")
+    st.caption(f"Batch #{meta['batch_id']} · "
+               f"{meta['boxes_opened']} opened by all users")
 
+    st.markdown("---")
 
-# ──────────────────────────────────────────────────────────
-# HEADER
-# ──────────────────────────────────────────────────────────
+    with st.expander("🔧 Admin — Restock"):
+        st.warning("Resets the pool for ALL users.")
+        if st.button("🏭 Restock Now"):
+            restock()
+            st.session_state.session_pulls  = []
+            st.session_state.last_result    = None
+            st.session_state.canvas_state   = "idle"
+            st.session_state.machine1_result= None
+            st.session_state.boxes_used     = 0
+            st.session_state.user_budget    = 0.0
+            st.success("Fresh batch loaded!")
+            st.rerun()
+
+# ── Page header ───────────────────────────────────────────
 st.markdown("""
-<div style='text-align:center; padding: 2rem 0 1rem;'>
-  <div style='font-size:11px; letter-spacing:0.18em; text-transform:uppercase;
-              color:#8b5cf6; margin-bottom:10px;'>✦ Stochastic Simulation Engine</div>
-  <h1 style='font-family:Playfair Display,serif; font-size:clamp(2rem,5vw,3.2rem);
-             font-weight:900; color:#f0e8ff; margin:0; line-height:1.1;'>
-    Labubu <span style='background:linear-gradient(135deg,#ff6b9d,#a78bfa,#3ec6e0);
-    -webkit-background-clip:text;-webkit-text-fill-color:transparent;'>Blind Box</span> Simulator
+<div style='text-align:center;padding:1.2rem 0 .6rem;'>
+  <div style='font-size:10px;letter-spacing:.18em;text-transform:uppercase;
+              color:#8b5cf6;margin-bottom:6px;'>✦ UGM · TIF212247 · Stochastic Simulation</div>
+  <h1 style='font-family:Playfair Display,serif;
+             font-size:clamp(1.8rem,4vw,2.8rem);
+             font-weight:900;color:#f0e8ff;margin:0;line-height:1.1;'>
+    Labubu
+    <span style='background:linear-gradient(135deg,#ff6b9d,#a78bfa,#3ec6e0);
+    -webkit-background-clip:text;-webkit-text-fill-color:transparent;'>
+    Blind Box</span>
   </h1>
-  <p style='color:#7060a0; margin-top:10px; font-size:15px;'>
-    4 Strategies · N = 100,000 trials · Fully vectorised NumPy
+  <p style='color:#7060a0;margin-top:6px;font-size:13px;'>
+    Shared Finite Pool · Sampling Without Replacement · Discrete Inverse Transform
   </p>
 </div>
 """, unsafe_allow_html=True)
-
 st.markdown("---")
 
 
-# ──────────────────────────────────────────────────────────
-# SESSION STATE — cache results
-# ──────────────────────────────────────────────────────────
-if "results" not in st.session_state:
-    st.session_state.results = None
-if "elapsed" not in st.session_state:
-    st.session_state.elapsed = None
-if "gbm_paths" not in st.session_state:
-    st.session_state.gbm_paths = None
+# ══════════════════════════════════════════════════════════
+# MACHINE 1 — BUDGET PREDICTOR
+# ══════════════════════════════════════════════════════════
+if "Machine 1" in page:
 
+    st.markdown("### 🎯 Machine 1 — Budget Predictor")
+    st.markdown(
+        "Select the Labubu figure you want to hunt for. "
+        "The simulator runs **Monte Carlo trials from the current pool state** "
+        "and tells you how much to budget at different confidence levels."
+    )
 
-# ──────────────────────────────────────────────────────────
-# RUN SIMULATION
-# ──────────────────────────────────────────────────────────
-if run_btn:
-    with st.spinner(f"Running {N:,} trials across 4 strategies…"):
-        t0 = time.perf_counter()
-        results = run_all_strategies(
-            N=N,
-            batch_size=batch_size,
-            gbm_S0=gbm_S0,
-            gbm_mu=gbm_mu,
-            gbm_sigma=gbm_sigma,
-            gbm_T=gbm_T,
-            threshold=threshold,
-            resale_discount=resale_discount,
-            seed=seed_val,
-        )
-        gbm_paths = run_gbm_display(
-            S0=gbm_S0, mu=gbm_mu, sigma=gbm_sigma, T=gbm_T, n_display=300,
-            seed=seed_val
-        )
-        elapsed = time.perf_counter() - t0
+    # ── Figure selector ───────────────────────────────────
+    st.markdown("#### Choose Your Target Figure")
+    st.caption(
+        "Click a card to select. "
+        "Images load from `images/` folder — see comments in code for filenames."
+    )
 
-    st.session_state.results  = results
-    st.session_state.elapsed  = elapsed
-    st.session_state.gbm_paths = gbm_paths
+    # We use st.radio invisibly to track selected figure
+    # and render the pretty HTML cards as a display layer
+    cols = st.columns(7)
+    for i, fig in enumerate(FIGURE_NAMES):
+        with cols[i]:
+            img_src   = get_image_b64(fig)
+            is_secret = fig == "Golden Labubu ✦"
+            is_sel    = st.session_state.selected_figure == fig
 
+            # Border styling
+            if is_sel and is_secret:
+                border = "2px solid #f6c94e"
+                bg     = "#2e1a10"
+                shadow = "0 0 0 3px rgba(246,201,78,0.35), 0 8px 24px rgba(246,201,78,0.2)"
+                name_col = "#ffe566"
+            elif is_sel:
+                border = "2px solid #a78bfa"
+                bg     = "#2e2550"
+                shadow = "0 0 0 3px rgba(167,139,250,0.35), 0 8px 24px rgba(139,92,246,0.2)"
+                name_col = "#e8d8ff"
+            else:
+                border = "2px solid #2e2550"
+                bg     = "#1c1630"
+                shadow = "none"
+                name_col = "#c8b8e8"
 
-# ──────────────────────────────────────────────────────────
-# DISPLAY — only if results exist
-# ──────────────────────────────────────────────────────────
-if st.session_state.results is None:
-    st.info("👈 Configure parameters in the sidebar and click **Run Simulation** to begin.")
+            prob_str  = "1/72 ≈ 1.39%" if is_secret else "16.44%"
 
-    # Show probability reference while waiting
-    st.markdown("### 📐 Probability Reference")
-    col1, col2, col3 = st.columns(3)
-    col1.metric("P(Secret | 1 box)",   f"{P_SECRET:.4%}")
-    col2.metric("P(Regular | 1 box)",  f"{P_REGULAR_EACH:.4%}")
-    col3.metric("Expected boxes to secret", "72")
-
-    col1, col2, col3 = st.columns(3)
-    col1.metric("Expected cost (Strategy A)", "$1,080")
-    col2.metric(f"P(secret in {batch_size} boxes)", f"{(1-(71/72)**batch_size):.2%}")
-    col3.metric("Box price", f"${BOX_PRICE:.0f}")
-
-else:
-    results  = st.session_state.results
-    elapsed  = st.session_state.elapsed
-    gbm_paths = st.session_state.gbm_paths
-
-    st.success(f"✅ {N:,} trials completed in **{elapsed*1000:.1f} ms** "
-               f"({N/elapsed/1e6:.1f}M samples/sec)")
-
-    # ── TABS ──────────────────────────────────────────────
-    tab1, tab2, tab3, tab4, tab5 = st.tabs([
-        "📊 Strategy Comparison",
-        "📈 Cost Distributions",
-        "🏪 Market Price (GBM)",
-        "🏬 Shelf Simulator",
-        "📦 Case Inspector",
-    ])
-
-
-    # ════════════════════════════════════════════════════
-    # TAB 1 — STRATEGY COMPARISON DASHBOARD
-    # ════════════════════════════════════════════════════
-    with tab1:
-        st.markdown("### Key Statistics — All Strategies")
-
-        # Strategy name map
-        label = {
-            "A": f"A — Gambler (1×)",
-            "B": f"B — Whale (12×)",
-            "D": f"D — Calculated ({batch_size}×)",
-            "C": f"C — Patient Buyer",
-        }
-
-        # KPI row
-        cols = st.columns(4)
-        for i, (key, col) in enumerate(zip(["A","B","D","C"], cols)):
-            r = results[key]
-            col.metric(
-                label=label[key],
-                value=f"${r.mean:,.0f}",
-                delta=f"σ = ${r.std:,.0f}",
-                delta_color="off",
+            st.markdown(
+                f"""<div style='background:{bg};border:{border};border-radius:14px;
+                    padding:12px 6px 10px;text-align:center;
+                    box-shadow:{shadow};transition:all .2s;'>
+                  <!-- INSERT IMAGE: images/{IMAGE_FILES.get(fig, '')} -->
+                  <img src="{img_src}" style='width:72px;height:72px;
+                       object-fit:contain;border-radius:8px;' alt="{fig}"/>
+                  <div style='font-size:10px;font-weight:600;color:{name_col};
+                       margin-top:6px;line-height:1.3;'>{fig}</div>
+                  <div style='font-size:9px;color:#7060a0;margin-top:2px;'>
+                    {prob_str}</div>
+                </div>""",
+                unsafe_allow_html=True,
             )
+            # Invisible button under each card to handle click
+            if st.button("select", key=f"sel_{i}",
+                         help=f"Target: {fig}",
+                         use_container_width=True):
+                st.session_state.selected_figure  = fig
+                st.session_state.machine1_result  = None
+                st.rerun()
 
-        st.markdown("---")
+    st.markdown("---")
 
-        # ── Percentile comparison bar chart
-        strategies = ["A", "B", "D", "C"]
-        fig = go.Figure()
-
-        metrics = {
-            "Median":    [results[k].median for k in strategies],
-            "95th Pct":  [results[k].p95    for k in strategies],
-            "99th Pct":  [results[k].p99    for k in strategies],
-        }
-        bar_colors = ["#6d28d9", "#8b5cf6", "#c4b5fd"]
-
-        for (metric_name, vals), color in zip(metrics.items(), bar_colors):
-            fig.add_trace(go.Bar(
-                name=metric_name,
-                x=[label[k] for k in strategies],
-                y=vals,
-                marker_color=color,
-                text=[f"${v:,.0f}" for v in vals],
-                textposition="outside",
-                textfont=dict(color=FONT_COLOR, size=11),
-            ))
-
-        fig.update_layout(
-            **base_layout("Cost Distribution: Median · 95th · 99th Percentile", height=420),
-            barmode="group",
-            yaxis_title="Total Cost ($)",
-        )
-        st.plotly_chart(fig, use_container_width=True)
-
-        # ── Summary table
-        st.markdown("### Full Statistics Table")
-        rows = [results[k].summary_dict() for k in strategies]
-        df_summary = pd.DataFrame(rows).set_index("Strategy")
-        st.dataframe(df_summary, use_container_width=True)
-
-        # ── Risk table
-        st.markdown("### Probability of Exceeding Budget Thresholds")
-        risk_data = {
-            "Strategy":      [label[k] for k in strategies],
-            "P(cost > $200)": [f"{results[k].prob_over_200:.1%}" for k in strategies],
-            "P(cost > $500)": [f"{results[k].prob_over_500:.1%}" for k in strategies],
-            "P(cost > $1,000)":[f"{results[k].prob_over_1000:.1%}" for k in strategies],
-            "95th Pct Budget": [f"${results[k].p95:,.0f}" for k in strategies],
-        }
-        st.dataframe(pd.DataFrame(risk_data).set_index("Strategy"), use_container_width=True)
-
-
-    # ════════════════════════════════════════════════════
-    # TAB 2 — COST DISTRIBUTIONS
-    # ════════════════════════════════════════════════════
-    with tab2:
-        st.markdown("### Empirical Cost Distribution (Histogram + KDE overlay)")
-        st.caption("Each distribution is built from 100,000 simulated trials.")
-
-        # Cap display at 99th percentile of max strategy for readability
-        cap = max(results[k].p99 for k in ["A","B","D","C"])
-
-        fig = go.Figure()
-        for key in ["A", "B", "D", "C"]:
-            r = results[key]
-            data_clipped = np.clip(r.costs, 0, cap)
-            fig.add_trace(go.Histogram(
-                x=data_clipped,
-                name=label[key],
-                opacity=0.55,
-                nbinsx=120,
-                marker_color=PALETTE[key],
-                histnorm="probability density",
-            ))
-
-        fig.update_layout(
-            **base_layout("Cost Probability Density — All Strategies", height=460),
-            barmode="overlay",
-            xaxis_title="Total Cost to Acquire Secret ($)",
-            yaxis_title="Probability Density",
-        )
-        st.plotly_chart(fig, use_container_width=True)
-
-        # ── Box plots
-        st.markdown("### Spread Comparison (Box Plots)")
-        fig2 = go.Figure()
-        for key in ["A", "B", "D", "C"]:
-            r = results[key]
-            # Sample 5000 for box plot speed
-            sample = np.random.choice(r.costs, size=5000, replace=False)
-            fig2.add_trace(go.Box(
-                y=np.clip(sample, 0, r.p99),
-                name=label[key],
-                marker_color=PALETTE[key],
-                line_color=PALETTE[key],
-                fillcolor=PALETTE[key] + "33",
-                boxmean=True,
-            ))
-
-        fig2.update_layout(
-            **base_layout("Cost Spread — Box Plots (capped at 99th pct)", height=420),
-            yaxis_title="Cost ($)",
-        )
-        st.plotly_chart(fig2, use_container_width=True)
-
-        # ── Cumulative Distribution (CDF)
-        st.markdown("### Cumulative Cost Probability")
-        st.caption("Read as: 'X% of the time I spend ≤ $Y to find the secret.'")
-        fig3 = go.Figure()
-        x_max = np.percentile(results["A"].costs, 98)
-        x_vals = np.linspace(0, x_max, 800)
-
-        for key in ["A", "B", "D", "C"]:
-            r = results[key]
-            cdf = np.searchsorted(np.sort(r.costs), x_vals) / len(r.costs)
-            fig3.add_trace(go.Scatter(
-                x=x_vals, y=cdf,
-                name=label[key],
-                mode="lines",
-                line=dict(color=PALETTE[key], width=2.5),
-            ))
-
-        # Threshold lines
-        for budget, dash in [(200, "dot"), (500, "dash"), (1000, "dashdot")]:
-            fig3.add_vline(x=budget, line_dash=dash, line_color="#4a3a6a",
-                           annotation_text=f"${budget}", annotation_font_color="#7060a0")
-
-        fig3.update_layout(
-            **base_layout("Empirical CDF — Probability of Finding Secret Within Budget", height=420),
-            xaxis_title="Budget ($)",
-            yaxis_title="Cumulative Probability",
-            yaxis_tickformat=".0%",
-        )
-        st.plotly_chart(fig3, use_container_width=True)
-
-
-    # ════════════════════════════════════════════════════
-    # TAB 3 — GBM MARKET PRICE CHART
-    # ════════════════════════════════════════════════════
-    with tab3:
-        st.markdown("### Reseller Market Price Simulation (GBM)")
-        st.latex(r"S_{t+1} = S_t \cdot \exp\!\left[\left(\mu - \frac{\sigma^2}{2}\right)\Delta t + \sigma\sqrt{\Delta t}\cdot Z_t\right], \quad Z_t \sim \mathcal{N}(0,1)")
-
-        col1, col2, col3 = st.columns(3)
-        col1.metric("Initial Price S₀", f"${gbm_S0:.0f}")
-        col2.metric("Annual Drift μ",   f"{gbm_mu:+.2f}")
-        col3.metric("Volatility σ",     f"{gbm_sigma:.2f}")
-
-        paths = gbm_paths      # shape (300, T+1)
-        days  = np.arange(paths.shape[1])
-
-        fig = go.Figure()
-
-        # Draw 60 faint paths
-        for i in range(min(60, paths.shape[0])):
-            fig.add_trace(go.Scatter(
-                x=days, y=paths[i],
-                mode="lines",
-                line=dict(color="rgba(167,139,250,0.12)", width=1),
-                showlegend=False,
-            ))
-
-        # Mean path
-        mean_path = paths.mean(axis=0)
-        fig.add_trace(go.Scatter(
-            x=days, y=mean_path,
-            mode="lines",
-            name="Mean Path",
-            line=dict(color="#a78bfa", width=2.5),
-        ))
-
-        # Percentile bands
-        p10 = np.percentile(paths, 10, axis=0)
-        p90 = np.percentile(paths, 90, axis=0)
-        fig.add_trace(go.Scatter(
-            x=np.concatenate([days, days[::-1]]),
-            y=np.concatenate([p90, p10[::-1]]),
-            fill="toself",
-            fillcolor="rgba(167,139,250,0.08)",
-            line=dict(color="rgba(0,0,0,0)"),
-            name="10th–90th Pct Band",
-        ))
-
-        # Threshold line
-        fig.add_hline(
-            y=threshold,
-            line_dash="dash", line_color=PALETTE["C"],
-            annotation_text=f"Buy Threshold ${threshold:.0f}",
-            annotation_font_color=PALETTE["C"],
-        )
-
-        fig.add_hline(
-            y=gbm_S0,
-            line_dash="dot", line_color="#4a3a6a",
-            annotation_text=f"S₀ = ${gbm_S0:.0f}",
-            annotation_font_color="#7060a0",
-        )
-
-        fig.update_layout(
-            **base_layout(f"300 GBM Price Paths — {gbm_T}-Day Window", height=480),
-            xaxis_title="Trading Day",
-            yaxis_title="Reseller Price ($)",
-        )
-        st.plotly_chart(fig, use_container_width=True)
-
-        # Distribution of final prices
-        st.markdown("### Distribution of Prices at Day " + str(gbm_T))
-        final_prices = paths[:, -1]
-        fig2 = go.Figure()
-        fig2.add_trace(go.Histogram(
-            x=final_prices,
-            nbinsx=40,
-            marker_color="#a78bfa",
-            opacity=0.75,
-            name="Final Price Distribution",
-        ))
-        fig2.add_vline(x=gbm_S0,   line_dash="dot",  line_color="#4a3a6a")
-        fig2.add_vline(x=threshold, line_dash="dash", line_color=PALETTE["C"],
-                       annotation_text=f"Threshold ${threshold:.0f}",
-                       annotation_font_color=PALETTE["C"])
-        fig2.update_layout(
-            **base_layout(f"Simulated Final Price Distribution at Day {gbm_T}", height=320),
-            xaxis_title="Price ($)",
-            yaxis_title="Count",
-        )
-        st.plotly_chart(fig2, use_container_width=True)
-
-        pct_below = np.mean(paths[:, -1] <= threshold)
-        st.info(
-            f"📊 With μ={gbm_mu:+.2f} and σ={gbm_sigma:.2f}, "
-            f"**{pct_below:.1%}** of paths end below the buy threshold of ${threshold:.0f} "
-            f"by day {gbm_T}."
-        )
-
-
-    # ════════════════════════════════════════════════════
-    # TAB 4 — SHELF CONDITIONAL PROBABILITY
-    # ════════════════════════════════════════════════════
-    with tab4:
-        st.markdown("### 🏬 The 'Gandaria City Shelf' Simulator")
+    # ── Run button ────────────────────────────────────────
+    target = st.session_state.selected_figure
+    c1, c2 = st.columns([3, 1])
+    with c1:
         st.markdown(
-            "Simulate walking into a store where some boxes are already taken. "
-            "How does that change your real odds of finding the Secret?"
+            f"**Selected:** {FIGURE_EMOJIS[target]} **{target}** · "
+            f"N = {N_mc:,} Monte Carlo trials"
+        )
+    with c2:
+        run_m1 = st.button("🚀 Run Prediction", use_container_width=True)
+
+    if run_m1:
+        with st.spinner(f"Running {N_mc:,} trials from current pool state…"):
+            st.session_state.machine1_result = simulate_budget_confidence(
+                N=N_mc,
+                target_figure=target,
+                confidence_levels=[0.50, 0.70, 0.80, 0.90, 0.95, 0.99],
+            )
+
+    result = st.session_state.machine1_result
+
+    if result is None:
+        st.info(
+            "👆 Select a figure above and click **Run Prediction** "
+            "to see how much you should budget."
         )
 
-        col1, col2 = st.columns([1, 1])
-        with col1:
-            n_taken = st.slider(
-                "Boxes already taken from the shelf",
-                min_value=0, max_value=11, value=4
-            )
-            run_shelf = st.button("🎰 Run This Scenario", key="shelf_btn")
+    elif result.get("target_gone"):
+        st.error(
+            f"💀 **{result['message']}** "
+            "This figure was already pulled by a previous user. "
+            "Wait for the admin to restock."
+        )
 
-        if run_shelf or True:
-            rng_shelf = np.random.default_rng()
-            result_shelf = shelf_conditional(n_taken, rng_shelf)
+    else:
+        st.markdown("---")
+        st.markdown("#### 💡 How Much Should You Budget?")
 
-            with col2:
-                st.markdown(f"**{result_shelf['verdict']}**")
-                c1, c2 = st.columns(2)
-                c1.metric("Boxes remaining", result_shelf["n_remaining"])
-                c2.metric(
-                    "Your P(secret)",
-                    f"{result_shelf['p_secret_remaining']:.2%}"
-                    if result_shelf["p_secret_remaining"] > 0 else "0%"
+        bfc = result["budget_for_confidence"]
+
+        # Confidence metric cards
+        conf_items = [
+            ("50%",  bfc.get(0.50, 0), False),
+            ("70%",  bfc.get(0.70, 0), False),
+            ("80%",  bfc.get(0.80, 0), False),
+            ("90%",  bfc.get(0.90, 0), False),
+            ("95%",  bfc.get(0.95, 0), True),
+            ("99%",  bfc.get(0.99, 0), False),
+        ]
+
+        cols_conf = st.columns(6)
+        for i, (pct_label, budget, highlight) in enumerate(conf_items):
+            with cols_conf[i]:
+                bg  = "#2e2550" if highlight else "#1c1630"
+                bdr = "#a78bfa" if highlight else "#2e2550"
+                st.markdown(
+                    f"""<div style='background:{bg};border:1.5px solid {bdr};
+                        border-radius:12px;padding:14px 8px;text-align:center;'>
+                      <div style='font-size:10px;color:#8a7aaa;letter-spacing:.08em;
+                           text-transform:uppercase;margin-bottom:4px;'>
+                        {pct_label} confidence</div>
+                      <div style='font-family:Playfair Display,serif;font-size:20px;
+                           font-weight:700;color:#f0e8ff;'>${budget:,.0f}</div>
+                    </div>""",
+                    unsafe_allow_html=True,
                 )
 
-        st.markdown("---")
-        st.markdown("### Distribution of Conditional P(secret) Across 10,000 Walk-Ins")
         st.caption(
-            "Each point = one simulated customer walking into a random store state. "
-            "Shows the full spectrum of luck asymmetry."
+            f"Based on {result['N']:,} simulations · "
+            f"Current pool: {result['total_remaining']} boxes remaining · "
+            f"P(target now) = {result['p_target_now']:.4%}"
         )
 
-        rng2 = np.random.default_rng(42)
-        p_cond = simulate_shelf_scenarios(10_000, rng2)
+        # Confidence curve chart
+        st.markdown("#### 📈 Confidence Curve")
+        conf_vals = sorted(bfc.keys())
+        budg_vals = [bfc[c] for c in conf_vals]
 
-        # Split into three groups
-        p_zero   = p_cond[p_cond == 0.0]
-        p_nonzero = p_cond[p_cond > 0.0]
-
-        col1, col2, col3 = st.columns(3)
-        col1.metric("P = 0% (wasted trip)", f"{len(p_zero)/len(p_cond):.1%}")
-        col2.metric("P > 0% (secret still here)", f"{len(p_nonzero)/len(p_cond):.1%}")
-        col3.metric("Mean conditional P", f"{p_cond.mean():.4%}")
-
-        fig = go.Figure()
-        fig.add_trace(go.Histogram(
-            x=p_nonzero * 100,
-            nbinsx=30,
-            marker_color="#f6c94e",
-            opacity=0.8,
-            name="P > 0% scenarios",
+        fig_chart = go.Figure()
+        fig_chart.add_trace(go.Scatter(
+            x=[c * 100 for c in conf_vals],
+            y=budg_vals,
+            mode="lines+markers",
+            name="Budget Required",
+            line=dict(color="#a78bfa", width=3),
+            marker=dict(size=8, color="#a78bfa"),
+            fill="tozeroy",
+            fillcolor="rgba(167,139,250,0.07)",
         ))
-        fig.update_layout(
-            **base_layout("Conditional P(secret) | Secret Still Present", height=340),
-            xaxis_title="Conditional Probability (%)",
-            yaxis_title="Count",
+
+        # Annotate the 80% and 95% points
+        for kc, col in [(0.80, "#f6c94e"), (0.95, "#ff6b9d")]:
+            if kc in bfc:
+                fig_chart.add_vline(
+                    x=kc * 100, line_dash="dash",
+                    line_color=col, opacity=0.7,
+                    annotation_text=f"{kc*100:.0f}%: ${bfc[kc]:,.0f}",
+                    annotation_font_color=col,
+                )
+
+        fig_chart.update_layout(
+            **base_layout("Budget Required vs. Confidence Level", height=360),
+            xaxis_title="Confidence Level (%)",
+            yaxis_title="Budget Required ($)",
         )
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig_chart, use_container_width=True)
 
-        st.info(
-            f"📐 Marginal check: mean across all scenarios = "
-            f"**{p_cond.mean():.5f}** ≈ 1/72 = {1/72:.5f} ✓  "
-            f"(Law of Total Probability holds)"
+        # SE validity proof
+        with st.expander("📐 Statistical Validity — Why N = " + f"{N_mc:,}?"):
+            se = compute_standard_error(result["cost_distribution"])
+            st.latex(r"\text{95\% CI} = \bar{X} \pm 1.96 \cdot \frac{\sigma}{\sqrt{N}}")
+            c1, c2, c3 = st.columns(3)
+            c1.metric("Standard Error", f"${se['se']:,.2f}")
+            c2.metric("95% CI Width",   f"±${se['ci95_width']/2:,.2f}")
+            c3.metric("Error % of Mean",f"{se['error_pct']:.3f}%")
+
+        # Sensitivity Analysis 1 — Depletion
+        with st.expander("🔬 SA-1: How Many Boxes Were Already Taken?"):
+            st.markdown(
+                "Shows how your expected budget changes depending on how many boxes "
+                "were already taken before you arrived — the *Gandaria City shelf problem*."
+            )
+            if st.button("▶ Run Depletion Analysis", key="run_sa1"):
+                with st.spinner("Running sensitivity analysis…"):
+                    st.session_state.sens_dep = sensitivity_depletion_level(N=30_000)
+
+            if st.session_state.sens_dep:
+                rows = st.session_state.sens_dep
+                df = pd.DataFrame([{
+                    "Boxes Taken": r["n_taken"],
+                    "Remaining":   r["pool_remaining"],
+                    "Secret Here": "✅" if r["secret_in_pool"] else "❌",
+                    "P(Secret)":  f"{r['p_secret']:.4%}",
+                    "Mean Budget": f"${r['mean_budget']:,.0f}" if r["mean_budget"] else "N/A",
+                    "80% Budget":  f"${r['budget_80pct']:,.0f}" if r["budget_80pct"] else "N/A",
+                    "95% Budget":  f"${r['budget_95pct']:,.0f}" if r["budget_95pct"] else "N/A",
+                } for r in rows])
+                st.dataframe(df, use_container_width=True)
+
+        # Sensitivity Analysis 2 — Confidence curve
+        with st.expander("🔬 SA-2: Full Confidence Curve (1% → 99%)"):
+            st.markdown(
+                "Notice the nonlinear cost explosion chasing certainty beyond 95%."
+            )
+            if st.button("▶ Run Full Curve", key="run_sa2"):
+                with st.spinner("Running full confidence curve…"):
+                    st.session_state.sens_conf = sensitivity_confidence_curve(
+                        target_figure=target, N=N_mc
+                    )
+
+            if st.session_state.sens_conf:
+                sc = st.session_state.sens_conf
+                if not sc.get("target_gone"):
+                    fig_sc = go.Figure()
+                    fig_sc.add_trace(go.Scatter(
+                        x=[c * 100 for c in sc["confidence_levels"]],
+                        y=sc["budget_required"],
+                        mode="lines",
+                        line=dict(color="#3ec6e0", width=2.5),
+                        fill="tozeroy",
+                        fillcolor="rgba(62,198,224,0.06)",
+                    ))
+                    kp = sc.get("key_points", {})
+                    for kc, col in [(0.80,"#f6c94e"),(0.95,"#ff6b9d"),(0.99,"#ff4b4b")]:
+                        if kc in kp:
+                            fig_sc.add_vline(
+                                x=kc*100, line_dash="dash",
+                                line_color=col, opacity=0.7,
+                                annotation_text=f"{kc*100:.0f}%: ${kp[kc]:,.0f}",
+                                annotation_font_color=col,
+                            )
+                    fig_sc.update_layout(
+                        **base_layout("Full Confidence Curve", height=340),
+                        xaxis_title="Confidence (%)",
+                        yaxis_title="Budget ($)",
+                    )
+                    st.plotly_chart(fig_sc, use_container_width=True)
+                    st.info(
+                        f"Going from 95% → 99% confidence costs "
+                        f"**${kp.get(0.99,0) - kp.get(0.95,0):,.0f} extra**. "
+                        "Chasing certainty is exponentially expensive."
+                    )
+
+
+# ══════════════════════════════════════════════════════════
+# MACHINE 2 — REAL-TIME BOX OPENER
+# ══════════════════════════════════════════════════════════
+elif "Machine 2" in page:
+
+    st.markdown("### 📦 Machine 2 — Real-Time Factory Loop")
+    st.markdown(
+        "Input your budget, then click the box to open it. "
+        "Each click draws from the **shared finite pool** using the "
+        "**Discrete Inverse Transform Method**. "
+        "Your shake allowance = your budget ÷ $15 per box."
+    )
+
+    meta = get_pool_metadata()
+
+    # ── Budget input ──────────────────────────────────────
+    st.markdown("#### 💰 Set Your Budget")
+    col_bud, col_info = st.columns([2, 3])
+
+    with col_bud:
+        raw_budget = st.number_input(
+            "How much are you staking? ($)",
+            min_value=0.0,
+            max_value=10_000.0,
+            value=float(st.session_state.user_budget) if st.session_state.user_budget else 0.0,
+            step=15.0,
+            help="Minimum $15 per box. Your allowance = budget ÷ $15."
         )
 
+        if st.button("✅ Set Budget", use_container_width=True):
+            if raw_budget < BOX_PRICE:
+                st.error(f"Minimum budget is ${BOX_PRICE:.0f} (1 box).")
+            else:
+                st.session_state.user_budget = raw_budget
+                st.session_state.boxes_used  = 0
+                st.session_state.session_pulls = []
+                st.session_state.last_result   = None
+                st.session_state.canvas_state  = "idle"
+                st.rerun()
 
-    # ════════════════════════════════════════════════════
-    # TAB 5 — CASE INSPECTOR
-    # ════════════════════════════════════════════════════
-    with tab5:
-        st.markdown("### 📦 Sealed Case Inspector")
-        st.markdown(
-            "Each click generates one physically-modelled sealed case of 12 boxes. "
-            "The secret appears in exactly **1 in 6 cases** on average."
+    with col_info:
+        budget  = st.session_state.user_budget
+        b_used  = st.session_state.boxes_used
+        if budget > 0:
+            allowance   = int(budget // BOX_PRICE)
+            remaining_b = allowance - b_used
+            spent       = b_used * BOX_PRICE
+
+            st.markdown(
+                f"""<div style='background:#1c1630;border:1px solid #2e2550;
+                    border-radius:14px;padding:18px 20px;'>
+                  <div style='display:flex;justify-content:space-between;
+                              flex-wrap:wrap;gap:12px;'>
+                    <div style='text-align:center;'>
+                      <div style='font-size:10px;color:#8a7aaa;
+                           text-transform:uppercase;letter-spacing:.08em;'>
+                        Total Budget</div>
+                      <div style='font-family:Playfair Display,serif;
+                           font-size:22px;font-weight:700;color:#f0e8ff;'>
+                        ${budget:,.0f}</div>
+                    </div>
+                    <div style='text-align:center;'>
+                      <div style='font-size:10px;color:#8a7aaa;
+                           text-transform:uppercase;letter-spacing:.08em;'>
+                        Boxes Allowance</div>
+                      <div style='font-family:Playfair Display,serif;
+                           font-size:22px;font-weight:700;color:#a78bfa;'>
+                        {allowance}</div>
+                    </div>
+                    <div style='text-align:center;'>
+                      <div style='font-size:10px;color:#8a7aaa;
+                           text-transform:uppercase;letter-spacing:.08em;'>
+                        Shakes Left</div>
+                      <div style='font-family:Playfair Display,serif;
+                           font-size:22px;font-weight:700;
+                           color:{"#ff6b9d" if remaining_b <= 3 else "#3ec6e0"};'>
+                        {remaining_b}</div>
+                    </div>
+                    <div style='text-align:center;'>
+                      <div style='font-size:10px;color:#8a7aaa;
+                           text-transform:uppercase;letter-spacing:.08em;'>
+                        Spent</div>
+                      <div style='font-family:Playfair Display,serif;
+                           font-size:22px;font-weight:700;color:#f6c94e;'>
+                        ${spent:,.0f}</div>
+                    </div>
+                  </div>
+                </div>""",
+                unsafe_allow_html=True,
+            )
+        else:
+            st.info("👆 Set your budget above to unlock the box opener.")
+
+    st.markdown("---")
+
+    # ── Box opener controls ───────────────────────────────
+    budget    = st.session_state.user_budget
+    b_used    = st.session_state.boxes_used
+    allowance = int(budget // BOX_PRICE) if budget >= BOX_PRICE else 0
+    shakes_left = allowance - b_used
+    pool_empty  = meta["total_remaining"] <= 0
+
+    can_open1  = (shakes_left >= 1) and not pool_empty and budget >= BOX_PRICE
+    can_open12 = (shakes_left >= 12) and (meta["total_remaining"] >= 12) and budget >= BOX_PRICE
+
+    col_o1, col_o12, col_reset = st.columns([1, 1, 1])
+    with col_o1:
+        open1 = st.button(
+            f"🎁 Shake 1 Box  ($15)",
+            disabled=not can_open1,
+            use_container_width=True,
+        )
+    with col_o12:
+        open12 = st.button(
+            f"📦 Shake Case  (12× · $180)",
+            disabled=not can_open12,
+            use_container_width=True,
+        )
+    with col_reset:
+        if st.button("↺ Reset Session", use_container_width=True):
+            st.session_state.session_pulls = []
+            st.session_state.last_result   = None
+            st.session_state.canvas_state  = "idle"
+            st.session_state.boxes_used    = 0
+            st.session_state.user_budget   = 0.0
+            st.rerun()
+
+    # Handle open 1
+    if open1:
+        r = open_one_box()
+        if not r["empty"]:
+            st.session_state.session_pulls.append(r["figure"])
+            st.session_state.last_result   = r
+            st.session_state.canvas_state  = "secret" if r["is_secret"] else "reveal"
+            st.session_state.boxes_used   += 1
+            if r["is_secret"]:
+                st.balloons()
+        else:
+            st.session_state.canvas_state = "empty"
+            st.session_state.last_result  = r
+
+    # Handle open 12
+    if open12:
+        batch, secret_hits = [], []
+        for _ in range(12):
+            r = open_one_box()
+            if r["empty"]: break
+            batch.append(r)
+            st.session_state.session_pulls.append(r["figure"])
+            st.session_state.boxes_used += 1
+            if r["is_secret"]: secret_hits.append(r)
+        if batch:
+            last_r = batch[-1]
+            st.session_state.last_result  = last_r
+            st.session_state.canvas_state = "secret" if last_r["is_secret"] else "reveal"
+            if secret_hits:
+                st.balloons()
+                st.success(
+                    f"🌟 SECRET in this case! "
+                    f"{secret_hits[0]['emoji']} **{secret_hits[0]['figure']}**"
+                )
+
+    # ── p5.js canvas ──────────────────────────────────────
+    last   = st.session_state.last_result
+    cstate = st.session_state.canvas_state
+    meta2  = get_pool_metadata()
+
+    if last and not last.get("empty"):
+        render_animation(
+            state=cstate,
+            figure=last["figure"],
+            emoji=last["emoji"],
+            is_secret=last["is_secret"],
+            remaining=meta2["total_remaining"],
+        )
+    else:
+        render_animation(
+            state="empty" if pool_empty else "idle",
+            remaining=meta2["total_remaining"],
         )
 
-        n_inspect = st.slider("Generate this many cases at once", 1, 50, 12)
+    # Budget exhausted message
+    if budget > 0 and shakes_left <= 0 and not pool_empty:
+        st.warning(
+            "🚫 **Budget exhausted.** "
+            "Go to Machine 1 to plan your next attempt, "
+            "or reset your session above."
+        )
 
-        if st.button("🎁 Generate Cases", key="case_btn"):
-            rng_case = np.random.default_rng()
-            cases = []
-            secret_count = 0
-            for i in range(n_inspect):
-                case = generate_sealed_case(rng_case)
-                has_secret = FIGURE_NAMES[6] in case
-                if has_secret:
-                    secret_count += 1
-                cases.append({
-                    "Case #": i + 1,
-                    "Contains Secret": "⭐ YES" if has_secret else "—",
-                    **{f"Box {j+1}": case[j] for j in range(12)}
-                })
-
-            df_cases = pd.DataFrame(cases).set_index("Case #")
-            st.dataframe(df_cases, use_container_width=True)
-
-            col1, col2, col3 = st.columns(3)
-            col1.metric("Cases generated", n_inspect)
-            col2.metric("Secret cases found", secret_count)
-            col3.metric(
-                "Observed rate",
-                f"{secret_count/n_inspect:.1%}",
-                delta=f"Expected: {1/6:.1%}",
-                delta_color="off"
+    # ── Last result card ──────────────────────────────────
+    if last and not last.get("empty") and cstate in ["reveal", "secret"]:
+        st.markdown("---")
+        if last["is_secret"]:
+            st.markdown(
+                f"""<div style='text-align:center;padding:20px;
+                    background:linear-gradient(135deg,#1a0d30,#2e1a50);
+                    border:2px solid #f6c94e;border-radius:16px;
+                    box-shadow:0 0 40px rgba(246,201,78,0.3);'>
+                  <div style='font-size:10px;letter-spacing:.2em;
+                       color:#f6c94e;'>✦ ULTRA RARE ✦</div>
+                  <div style='font-size:52px;margin:8px 0;'>{last['emoji']}</div>
+                  <div style='font-size:22px;font-weight:700;color:#ffe566;
+                       font-family:Playfair Display,serif;'>{last['figure']}</div>
+                  <div style='font-size:12px;color:rgba(255,229,102,.55);
+                       margin-top:4px;'>P = 1/72 ≈ 1.39%</div>
+                </div>""",
+                unsafe_allow_html=True,
+            )
+        else:
+            st.markdown(
+                f"""<div style='text-align:center;padding:16px;
+                    background:#1c1630;border:1px solid #2e2550;
+                    border-radius:14px;'>
+                  <div style='font-size:10px;letter-spacing:.14em;
+                       color:#8a7aaa;'>YOU GOT</div>
+                  <div style='font-size:44px;margin:6px 0;'>{last['emoji']}</div>
+                  <div style='font-size:18px;font-weight:600;
+                       color:#f0e8ff;'>{last['figure']}</div>
+                </div>""",
+                unsafe_allow_html=True,
             )
 
-        st.markdown("---")
-        st.markdown("### 📐 Probability Derivation Proof")
-        st.markdown("""
-        The **1/72** is not an assumption — it's derived from the physical packaging rules:
+    # ── Progress bar & batch status ───────────────────────
+    st.markdown("---")
+    st.markdown("#### 🏭 Batch Progress")
+    st.caption("Exact figure counts are hidden — that's what makes it a blind box.")
 
-        | Rule | Value |
-        |------|-------|
-        | Boxes per case | 12 |
-        | Cases per secret case | 1 in 6 |
-        | P(this is a secret case) | 1/6 |
-        | P(you pick the secret box \| secret case) | 1/12 |
-        | **P(secret \| any box)** | **1/6 × 1/12 = 1/72** |
-        """)
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Remaining in Batch", meta2["total_remaining"])
+    c2.metric("Opened (All Users)", meta2["boxes_opened"])
+    c3.metric("Your Pulls This Session", len(st.session_state.session_pulls))
 
-        st.latex(r"P(\text{secret}) = P(\text{secret case}) \times P(\text{pick secret box} \mid \text{secret case}) = \frac{1}{6} \times \frac{1}{12} = \frac{1}{72}")
-
-        st.markdown("### Strategy D — Batch Size vs. Variance")
-        b_vals = np.arange(1, 73)
-        p_b    = 1 - (71/72)**b_vals
-        ev     = (b_vals * BOX_PRICE) / p_b
-        std_b  = np.sqrt((1 - p_b) / p_b**2) * b_vals * BOX_PRICE
-
-        fig = make_subplots(specs=[[{"secondary_y": True}]])
-        fig.add_trace(go.Scatter(
-            x=b_vals, y=ev,
-            name="Expected Cost",
-            line=dict(color="#a78bfa", width=2.5),
-        ), secondary_y=False)
-        fig.add_trace(go.Scatter(
-            x=b_vals, y=std_b,
-            name="Std Deviation",
-            line=dict(color="#f6c94e", width=2, dash="dash"),
-        ), secondary_y=True)
-
-        fig.add_vline(x=batch_size, line_dash="dot", line_color="#ff6b9d",
-                      annotation_text=f"b = {batch_size}", annotation_font_color="#ff6b9d")
-
-        fig.update_layout(
-            **base_layout("Expected Cost & Std Dev vs. Batch Size", height=380),
-            xaxis_title="Batch Size b",
+    if allowance > 0:
+        st.progress(
+            min(b_used / allowance, 1.0),
+            text=f"Your budget: {b_used}/{allowance} boxes used (${b_used*BOX_PRICE:,.0f} of ${budget:,.0f})"
         )
-        fig.update_yaxes(title_text="Expected Total Cost ($)", secondary_y=False,
-                         gridcolor=GRID_COLOR)
-        fig.update_yaxes(title_text="Std Deviation ($)", secondary_y=True,
-                         gridcolor=GRID_COLOR)
-        st.plotly_chart(fig, use_container_width=True)
 
-        st.info(
-            "📊 Notice: expected cost stays flat at ≈$1,080 regardless of batch size. "
-            "**Only the variance changes.** Larger batches = more predictable spending."
-        )
+    st.progress(
+        1 - meta2["pct_remaining"] / 100,
+        text=f"Factory batch: {meta2['boxes_opened']}/72 boxes opened by all users"
+    )
+
+    # ── Pull history ──────────────────────────────────────
+    pulls = st.session_state.session_pulls
+    if pulls:
+        with st.expander(f"📜 Your Pull History ({len(pulls)} boxes · ${len(pulls)*BOX_PRICE:,.0f} spent)"):
+            hist_cols = st.columns(6)
+            for i, fig in enumerate(reversed(pulls[-30:])):
+                is_s = fig == "Golden Labubu ✦"
+                hist_cols[i % 6].markdown(
+                    f"""<div style='text-align:center;padding:8px 4px;
+                        background:{'#2e1a50' if is_s else '#1c1630'};
+                        border:1px solid {'#f6c94e' if is_s else '#2e2550'};
+                        border-radius:8px;margin:2px;'>
+                      <div style='font-size:20px;'>{FIGURE_EMOJIS[fig]}</div>
+                      <div style='font-size:9px;
+                           color:{'#ffe566' if is_s else '#8a7aaa'};'>
+                        {fig[:10]}</div>
+                    </div>""",
+                    unsafe_allow_html=True,
+                )
